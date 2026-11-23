@@ -15,10 +15,10 @@ Legend: **[S]** Shared · **[M]** MacHost · **[P]** PhoneClient · **[U]** need
 
 **F1 · Mac streamer**
 - [x] [S] Video header, stream parser, Annex-B helpers, control messages, clock sync (+ tests)
-- [ ] [M] Menu-bar app + permission checklist
-- [ ] [M] `DisplayCapture` of the built-in display, 60 fps, `showsCursor = false`
-- [ ] [M] `VideoEncoder`: HEVC low-latency, H.264 fallback, Annex-B with inline parameter sets
-- [ ] [M] `HostServer`: Bonjour + WebSocket control + TCP video, back-pressure
+- [x] [M] Menu-bar app + permission checklist
+- [x] [M] `DisplayCapture` of the built-in display, 60 fps, `showsCursor = false`
+- [x] [M] `VideoEncoder`: HEVC low-latency, H.264 fallback, Annex-B with inline parameter sets
+- [x] [M] `HostServer`: Bonjour + WebSocket control + TCP video, back-pressure
 - [ ] [M] Debug dump to `~/Desktop/stream.h265`, verify with `ffplay`
 
 **F2 · Flat iPhone client**

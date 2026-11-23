@@ -38,7 +38,7 @@ public struct Pong: Codable, Equatable {
     public var t0: Int64; public var t1: Int64
     public init(t0: Int64, t1: Int64) { self.t0 = t0; self.t1 = t1 }
 }
-public struct Scene: Codable, Equatable {
+public struct SceneMessage: Codable, Equatable {
     public var revision: Int; public var panels: [PanelInfo]
     public init(revision: Int, panels: [PanelInfo]) { self.revision = revision; self.panels = panels }
 }
@@ -121,7 +121,7 @@ public struct Stats: Codable, Equatable {
 
 /// All control messages; JSON with a snake_case `type` discriminator. Unknown types decode to `.unknown`.
 public enum ControlMessage: Equatable {
-    case hello(Hello), ping(Ping), pong(Pong), scene(Scene), startupScan(StartupScan)
+    case hello(Hello), ping(Ping), pong(Pong), scene(SceneMessage), startupScan(StartupScan)
     case panelUpdate(PanelUpdate), addDisplay(AddDisplay), removeDisplay(RemoveDisplay), unhideAll
     case rotate(Rotate), qualityRequest(QualityRequest), requestIDR(RequestIDR)
     case inputMode(InputMode), arInput(ARInput), layoutCommand(LayoutCommand), enterScreen(EnterScreen)
@@ -160,7 +160,7 @@ extension ControlMessage: Codable {
         case "hello": self = .hello(try p(Hello.self))
         case "ping": self = .ping(try p(Ping.self))
         case "pong": self = .pong(try p(Pong.self))
-        case "scene": self = .scene(try p(Scene.self))
+        case "scene": self = .scene(try p(SceneMessage.self))
         case "startup_scan": self = .startupScan(try p(StartupScan.self))
         case "panel_update": self = .panelUpdate(try p(PanelUpdate.self))
         case "add_display": self = .addDisplay(try p(AddDisplay.self))

@@ -8,7 +8,7 @@ final class ControlMessageTests: XCTestCase {
         return [
             .hello(Hello(device: "iPhone14,2", screenWidth: 2532, screenHeight: 1170)),
             .ping(Ping(t0: 1_764_000_000_000_000)), .pong(Pong(t0: 1, t1: 2)),
-            .scene(Scene(revision: 12, panels: [panel, PanelInfo(id: "desktop-1", kind: .mirror, streamId: 0, desktopIndex: 1, widthM: 1.1, aspect: 1.6)])),
+            .scene(SceneMessage(revision: 12, panels: [panel, PanelInfo(id: "desktop-1", kind: .mirror, streamId: 0, desktopIndex: 1, widthM: 1.1, aspect: 1.6)])),
             .startupScan(StartupScan(desktops: 2, step: 1, status: "moving_windows", message: "Masaüstü 2/2")),
             .panelUpdate(PanelUpdate(panelId: "desktop-2", transform: Array(repeating: 0.5, count: 16), widthM: 1.6, curvature: 0.2)),
             .addDisplay(AddDisplay(afterPanelId: "desktop-2")), .removeDisplay(RemoveDisplay(panelId: "desktop-3")),
