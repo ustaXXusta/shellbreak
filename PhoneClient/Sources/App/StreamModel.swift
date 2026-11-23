@@ -43,8 +43,10 @@ final class StreamModel: ObservableObject {
             case .hud(let h) where h.text == "!recenter": self?.settings.requestRecenter()
             case .hud(let h): self?.hud.flash(h.text, seconds: 2.5)
             case .inputMode(let m):
+                self?.settings.layoutActive = m.mode == "layout"
                 if m.mode == "layout" { self?.hud.setPersistent("DÜZEN MODU · Esc: ekran modu") }
                 else { self?.hud.setPersistent(nil); self?.hud.flash("Ekran modu") }
+            case .arInput(let i): if self?.settings.layoutActive == true { self?.settings.enqueue(i) }
             case .layoutCommand(let c): self?.settings.enqueue(c)
             default: break
             }
@@ -53,6 +55,9 @@ final class StreamModel: ObservableObject {
         decoder.onDecoded = { [weak self] captureUs in self?.decoded(captureUs) }
         settings.onPanelChanged = { [weak self] t, w in
             self?.connection.send(.panelUpdate(PanelUpdate(panelId: "desktop-1", transform: t, widthM: Double(w), curvature: 0)))
+        }
+        settings.onEnterScreen = { [weak self] u, v in
+            self?.connection.send(.enterScreen(EnterScreen(panelId: "desktop-1", u: u, v: v)))
         }
         ar.start()
         connection.start()

@@ -21,6 +21,11 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var panelWorld: simd_float4x4?
     private let hud: HUDOverlay
     private var changedAt: Date?
+    private var arYaw: Float = 0, arPitch: Float = 0
+    private var wasLayout = false
+    /// AR cursor placement for the current frame: world transform of the hand sprite, and u/v when over the panel.
+    private var handModel: simd_float4x4?
+    private var handUV: (Double, Double)?
     private var eyeTextures: [MTLTexture] = []
     private var eyeSize = (width: 0, height: 0)
 
@@ -139,6 +144,52 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         }
     }
 
+    /// Layout-mode mouse: steer a head-relative ray, hit-test it against the panel, click → enter screen mode there.
+    private func updateARCursor(camera: simd_float4x4, hasFrame: Bool, aspect: Float) {
+        let layout = settings.layoutActive
+        if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0 }
+        handModel = nil; handUV = nil
+        guard layout, hasFrame, let panel = panelWorld else { _ = settings.takeInputs(); return }
+        var clicked = false
+        for i in settings.takeInputs() {
+            switch i.kind {
+            case "move":
+                arYaw = max(-0.6, min(0.6, arYaw - Float(i.dx) * 0.0022))
+                arPitch = max(-0.45, min(0.45, arPitch - Float(i.dy) * 0.0022))
+            case "down": clicked = true
+            default: break
+            }
+        }
+        let rot = simd_float3x3(SIMD3(camera.columns.0.x, camera.columns.0.y, camera.columns.0.z),
+                                SIMD3(camera.columns.1.x, camera.columns.1.y, camera.columns.1.z),
+                                SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
+        let o = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
+        let d = simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch))
+        let n = SIMD3(panel.columns.2.x, panel.columns.2.y, panel.columns.2.z)
+        let c = SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z)
+        var point = o + d * 2, basis = camera, scale: Float = 2
+        let denom = simd_dot(d, n)
+        if abs(denom) > 1e-4 {
+            let t = simd_dot(c - o, n) / denom
+            if t > 0.1 {
+                let p = o + d * t
+                let local = panel.inverse * SIMD4(p, 1)
+                let w = settings.panelWidthM, h = w / aspect
+                let u = Double(local.x / w + 0.5), v = Double(0.5 - local.y / h)
+                if u >= 0, u <= 1, v >= 0, v <= 1 {
+                    handUV = (u, v); point = p + n * 0.01; basis = panel; scale = t
+                } else { scale = t }
+            }
+        }
+        let half: Float = 0.045 * max(scale, 0.8)
+        var m = basis; m.columns.3 = SIMD4(point, 1)
+        var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, -half, 0, 1)   // fingertip at the hit point
+        handModel = m * off
+        handHalf = half
+        if clicked, let (u, v) = handUV { settings.onEnterScreen?(u, v) }
+    }
+    private var handHalf: Float = 0.05
+
     func draw(in view: MTKView) {
         let cal = settings.calibration
         let ds = view.drawableSize
@@ -155,6 +206,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         let panelModel = panelWorld ?? { var m = matrix_identity_float4x4; m.columns.3 = SIMD4(0, 0, -panelDistanceM, 1); return m }()
         let v4 = camT.inverse                      // world -> head (camera) space, full 6DoF
         let video = videoTexture()
+        updateARCursor(camera: camT, hasFrame: frame != nil, aspect: video?.1 ?? 1.6)
         let cameraTex = settings.passthrough ? cameraTextures(frame) : nil
         let ipd = Float(cal.lensSeparationMm) / 1000
         let aspectEye = Double(eyeSize.width) / Double(eyeSize.height)
@@ -210,6 +262,16 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     enc.setFragmentTexture(ct, index: 0)
                     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
+            }
+            if let hm = handModel, let ht = cursor.handTexture {
+                var shift = simd_float4x4(1)
+                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
+                struct HC { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
+                var hc = HC(mvp: proj * shift * v4 * hm, halfSize: SIMD2(handHalf, handHalf))
+                enc.setRenderPipelineState(spritePipeline)
+                enc.setVertexBytes(&hc, length: MemoryLayout<HC>.size, index: 0)
+                enc.setFragmentTexture(ht, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
             if let (ht, hasp) = hud.current() {
                 var shift = simd_float4x4(1)

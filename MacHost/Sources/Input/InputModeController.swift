@@ -23,6 +23,27 @@ final class InputModeController: @unchecked Sendable {
         set { lock.lock(); _phoneConnected = newValue; lock.unlock() }
     }
     private var _phoneConnected = false
+    private var pendingDX = 0.0, pendingDY = 0.0
+    private var flushTimer: DispatchSourceTimer?
+
+    /// Click inside a panel: put the macOS cursor at the clicked point and leave layout mode.
+    func enterScreen(u: Double, v: Double) {
+        let b = CGDisplayBounds(CGMainDisplayID())
+        CGWarpMouseCursorPosition(CGPoint(x: b.minX + max(0, min(1, u)) * (b.width - 1), y: b.minY + max(0, min(1, v)) * (b.height - 1)))
+        forceScreen()
+    }
+
+    private func startFlush() {
+        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInteractive))
+        t.schedule(deadline: .now(), repeating: .milliseconds(8))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.lock.lock(); let dx = self.pendingDX, dy = self.pendingDY; self.pendingDX = 0; self.pendingDY = 0; self.lock.unlock()
+            if dx != 0 || dy != 0 { self.send?(.arInput(ARInput(kind: "move", dx: dx, dy: dy))) }
+        }
+        flushTimer = t; t.resume()
+    }
+    private func stopFlush() { flushTimer?.cancel(); flushTimer = nil }
     var onModeChange: ((InputModeState) -> Void)?
 
     var style: ExitKeyStyle {
@@ -84,11 +105,13 @@ final class InputModeController: @unchecked Sendable {
     private func enterLayout() {
         if !cursorHidden { CGDisplayHideCursor(CGMainDisplayID()); cursorHidden = true }
         CGAssociateMouseAndMouseCursorPosition(0)
+        startFlush()
         send?(.inputMode(InputMode(mode: "layout")))
         onModeChange?(.layout)
     }
 
     private func leaveLayout(notify: Bool) {
+        stopFlush()
         CGAssociateMouseAndMouseCursorPosition(1)
         if cursorHidden { CGDisplayShowCursor(CGMainDisplayID()); cursorHidden = false }
         if notify {
@@ -134,8 +157,18 @@ final class InputModeController: @unchecked Sendable {
             }
         case .keyUp:
             return mode == .layout ? nil : Unmanaged.passUnretained(event)
+        case .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            guard mode == .layout else { return Unmanaged.passUnretained(event) }
+            lock.lock()
+            pendingDX += event.getDoubleValueField(.mouseEventDeltaX); pendingDY += event.getDoubleValueField(.mouseEventDeltaY)
+            lock.unlock()
+            return nil
+        case .leftMouseDown, .leftMouseUp:
+            guard mode == .layout else { return Unmanaged.passUnretained(event) }
+            send?(.arInput(ARInput(kind: type == .leftMouseDown ? "down" : "up", optionHeld: event.flags.contains(.maskAlternate))))
+            return nil
         default:
-            return mode == .layout ? nil : Unmanaged.passUnretained(event)   // mouse + scroll swallowed in layout mode
+            return mode == .layout ? nil : Unmanaged.passUnretained(event)   // other mouse + scroll swallowed in layout mode
         }
     }
 }

@@ -21,6 +21,16 @@ final class CursorOverlay: @unchecked Sendable {
         }
     }
 
+    /// Layout-mode AR cursor: a pointing hand (fingertip at the top centre), so it differs from the macOS arrow.
+    private(set) lazy var handTexture: MTLTexture? = {
+        let font = UIFont.systemFont(ofSize: 110)
+        let text = "👆" as NSString
+        let size = text.size(withAttributes: [.font: font])
+        let img = UIGraphicsImageRenderer(size: size).image { _ in text.draw(at: .zero, withAttributes: [.font: font]) }
+        guard let data = img.pngData() else { return nil }
+        return try? loader?.newTexture(data: data, options: [.SRGB: false])
+    }()
+
     var snapshot: Snapshot { lock.lock(); defer { lock.unlock() }; return snap }
 
     func update(_ c: CursorState) {

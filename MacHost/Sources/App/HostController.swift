@@ -79,6 +79,7 @@ final class HostController: ObservableObject {
             }
             server.onNeedKeyframe = { [weak enc] _ in enc?.requestKeyframe() }
             server.onMessage = { [weak self] msg in
+                if case .enterScreen(let e) = msg { self?.inputController.enterScreen(u: e.u, v: e.v) }
                 if case .panelUpdate(let u) = msg { Task { @MainActor in self?.applyPhonePanelWidth(u.widthM) } }
                 if case .hello = msg { Task { @MainActor in
                     guard let self else { return }
