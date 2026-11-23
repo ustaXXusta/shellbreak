@@ -1,4 +1,5 @@
 import MetalKit
+import QuartzCore
 import ARKit
 import CoreVideo
 import simd
@@ -16,6 +17,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private let settings: StereoSettings
     private let cursor: CursorOverlay
     private let spritePipeline: MTLRenderPipelineState
+    private let themePipeline: MTLRenderPipelineState
     private let ar: ARSessionController
     private let cameraPipeline: MTLRenderPipelineState
     private var panelWorld: simd_float4x4?
@@ -54,6 +56,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         spritePipeline = sp
         guard let cam = pipe("cameraVertex", "cameraFragment", .bgra8Unorm) else { return nil }
         cameraPipeline = cam
+        guard let th = pipe("quadVertex", "themeFragment", .bgra8Unorm) else { return nil }
+        themePipeline = th
         panelPipeline = a; testPipeline = b; distortPipeline = c
         CVMetalTextureCacheCreate(nil, nil, dev, nil, &cache)
         super.init()
@@ -149,14 +153,16 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var dragLocal = SIMD2<Float>(0, 0)       // handle point the hand stays pinned to while dragging
     private var hover: PanelRegion = .none
     private var handlesVisible = false
+    private var pickerOpen = false
+    static let themeNames = ["Siyah", "Lav lambası", "Vice City", "Yağmur", "Güneşli", "Matrix", "Cyberpunk", "Steampunk", "Solarpunk"]
 
     /// Layout-mode mouse: steer a head-relative ray, hit-test it against the panel and its handles,
     /// drag the move bar / resize corner, click content → enter screen mode there.
     private func updateARCursor(camera: simd_float4x4, hasFrame: Bool, aspect: Float) {
         let layout = settings.layoutActive
         if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0; drag = nil }
-        handModel = nil; handUV = nil; handlesVisible = false; hover = .none
-        guard layout, hasFrame, var panel = panelWorld else { _ = settings.takeInputs(); drag = nil; return }
+        handModel = nil; handUV = nil; handlesVisible = false; hover = .none; let wasPicker = pickerOpen; pickerOpen = false
+        guard layout, hasFrame, var panel = panelWorld else { pickerOpen = false; _ = settings.takeInputs(); drag = nil; return }
         let head = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
         let width = settings.panelWidthM
         let inputs = settings.takeInputs()
@@ -196,11 +202,16 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 }
             case "down":
                 if drag == nil, let h = rayHit() {
-                    switch PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: settings.panelWidthM, aspect: aspect) {
+                    switch PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: settings.panelWidthM, aspect: aspect, pickerOpen: wasPicker) {
                     case .content(let u, let v): settings.onEnterScreen?(u, v)
                     case .moveBar: drag = .move; dragLocal = PanelHandleGeometry.moveBar(width: settings.panelWidthM, aspect: aspect).center
                     case .resizeCorner: drag = .resize; dragLocal = PanelHandleGeometry.resizeCorner(width: settings.panelWidthM, aspect: aspect).center
-                    case .rotate: hud.flash("Döndürme F5'te geliyor")
+                    case .rotate: hud.flash("Ana ekran döndürülemez")
+                    case .darken: settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "Dünya karartıldı")
+                    case .theme: break
+                    case .themeChoice(let i):
+                        if settings.passthrough { hud.flash("Önce 🌙 ile dünyayı karart") }
+                        else { settings.theme = i; hud.flash(Self.themeNames[i]) }
                     case .add: settings.onAddDisplay?(); hud.flash("Yeni ekran isteği gönderildi")
                     case .close: hud.flash("Kapatma F5'te geliyor")
                     case .none: break
@@ -221,7 +232,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             handlesVisible = true; hover = dr == .move ? .moveBar : .resizeCorner
             handHalfSize = 0.0225 * 1.4
         } else if let h = rayHit() {
-            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: w, aspect: aspect)
+            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: w, aspect: aspect, pickerOpen: wasPicker)
+            switch region { case .theme, .themeChoice: pickerOpen = true; default: break }
             let area = PanelHandleGeometry.hoverArea(width: w, aspect: aspect)
             if area.contains(h.local.x, h.local.y) {
                 hover = region; handlesVisible = true
@@ -288,6 +300,17 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 enc.setFragmentTexture(yT, index: 0); enc.setFragmentTexture(cT, index: 1)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
+            if cameraTex == nil, !cal.testPattern, settings.theme > 0 {
+                struct TP { var right: SIMD4<Float>; var up: SIMD4<Float>; var back: SIMD4<Float>; var tanY: Float; var aspect: Float; var time: Float; var theme: Int32 }
+                var tp = TP(right: camT.columns.0, up: camT.columns.1, back: camT.columns.2,
+                            tanY: Float(tan(cal.fovDegrees * .pi / 360)), aspect: Float(aspectEye),
+                            time: Float(CACurrentMediaTime().truncatingRemainder(dividingBy: 3600)), theme: Int32(settings.theme))
+                var sc = SIMD2<Float>(1, 1)
+                enc.setRenderPipelineState(themePipeline)
+                enc.setVertexBytes(&sc, length: 8, index: 0)
+                enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
             if cal.testPattern || video == nil {
                 var asp = Float(aspectEye); var sc = SIMD2<Float>(1, 1)
                 enc.setRenderPipelineState(testPipeline)
@@ -338,6 +361,15 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 draw(b[0], handles.rotate, hot: hover == .rotate)
                 draw(b[1], handles.add, hot: hover == .add)
                 draw(b[2], handles.close, hot: hover == .close)
+                draw(b[3], handles.dark, hot: hover == .darken)
+                draw(b[4], handles.theme, hot: hover == .theme)
+                if pickerOpen {
+                    let c = PanelHandleGeometry.themeCircles(width: w, aspect: asp)
+                    for (i, r) in c.enumerated() {
+                        var sel = false; if case .themeChoice(let k) = hover { sel = k == i }
+                        draw(r, handles.circles[i], hot: sel || (!settings.passthrough && settings.theme == i))
+                    }
+                }
             }
             if let hm = handModel, let ht = cursor.handTexture {
                 var shift = simd_float4x4(1)

@@ -31,7 +31,7 @@ final class CursorOverlay: @unchecked Sendable {
         return try? loader?.newTexture(data: data, options: [.SRGB: false])
     }()
 
-    struct Handles { var bar, corner, rotate, add, close: MTLTexture }
+    struct Handles { var bar, corner, rotate, add, close, dark, theme: MTLTexture; var circles: [MTLTexture] }
     /// Flat handle sprites drawn around a hovered panel in layout mode.
     private(set) lazy var handles: Handles? = {
         func glyph(_ text: String, size: CGSize, bg: UIColor) -> MTLTexture? {
@@ -53,7 +53,23 @@ final class CursorOverlay: @unchecked Sendable {
               let rot = glyph("↻", size: sq, bg: UIColor(white: 0.25, alpha: 0.9)),
               let add = glyph("+", size: sq, bg: UIColor(red: 0.15, green: 0.6, blue: 0.3, alpha: 0.9)),
               let close = glyph("×", size: sq, bg: UIColor(red: 0.75, green: 0.2, blue: 0.2, alpha: 0.9)) else { return nil }
-        return Handles(bar: bar, corner: corner, rotate: rot, add: add, close: close)
+        guard let dark = glyph("🌙", size: sq, bg: UIColor(white: 0.12, alpha: 0.92)),
+              let theme = glyph("🎨", size: sq, bg: UIColor(white: 0.25, alpha: 0.92)) else { return nil }
+        let colors: [UIColor] = [.black, UIColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1), UIColor(red: 1, green: 0.25, blue: 0.65, alpha: 1),
+                                 UIColor(red: 0.3, green: 0.42, blue: 0.6, alpha: 1), UIColor(red: 1, green: 0.8, blue: 0.1, alpha: 1),
+                                 UIColor(red: 0.0, green: 0.8, blue: 0.2, alpha: 1), UIColor(red: 0.1, green: 0.9, blue: 1, alpha: 1),
+                                 UIColor(red: 0.72, green: 0.45, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1)]
+        let circles: [MTLTexture] = colors.compactMap { c in
+            let sz = CGSize(width: 96, height: 96)
+            let img = UIGraphicsImageRenderer(size: sz).image { _ in
+                UIColor.white.setFill(); UIBezierPath(ovalIn: CGRect(origin: .zero, size: sz)).fill()
+                c.setFill(); UIBezierPath(ovalIn: CGRect(x: 8, y: 8, width: 80, height: 80)).fill()
+            }
+            guard let d = img.pngData() else { return nil }
+            return try? loader?.newTexture(data: d, options: [.SRGB: false])
+        }
+        guard circles.count == colors.count else { return nil }
+        return Handles(bar: bar, corner: corner, rotate: rot, add: add, close: close, dark: dark, theme: theme, circles: circles)
     }()
 
     var snapshot: Snapshot { lock.lock(); defer { lock.unlock() }; return snap }

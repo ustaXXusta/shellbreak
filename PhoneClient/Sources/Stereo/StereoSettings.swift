@@ -11,6 +11,7 @@ final class StereoSettings: @unchecked Sendable {
     private var _commands: [LayoutCommand] = []
     private var _panelWidth: Float = 2.0
     private var _layoutActive = false
+    private var _theme = UserDefaults.standard.integer(forKey: "theme.v1")
     private var _inputs: [ARInput] = []
 
     var calibration: Calibration {
@@ -28,6 +29,11 @@ final class StereoSettings: @unchecked Sendable {
     var passthrough: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _passthrough }
         set { lock.lock(); _passthrough = newValue; lock.unlock() }
+    }
+    /// 0 = plain black, 1…8 = procedural world themes (only visible while the real world is darkened).
+    var theme: Int {
+        get { lock.lock(); defer { lock.unlock() }; return _theme }
+        set { lock.lock(); _theme = max(0, min(8, newValue)); lock.unlock(); UserDefaults.standard.set(max(0, min(8, newValue)), forKey: "theme.v1") }
     }
     var layoutActive: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _layoutActive }
