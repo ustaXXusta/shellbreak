@@ -7,7 +7,11 @@ struct ControlView: View {
     var scrollable = false
 
     var body: some View {
-        if scrollable { ScrollView { content }.frame(minWidth: 360, minHeight: 520) } else { content }
+        // Always scrollable: the panel is taller than a laptop screen once the display editor is included.
+        let h = min(720, (NSScreen.main?.visibleFrame.height ?? 800) - 60)
+        ScrollView(.vertical, showsIndicators: true) { content }
+            .frame(width: 340, height: scrollable ? nil : h)
+            .frame(minHeight: scrollable ? 400 : nil)
     }
 
     private var content: some View {
@@ -64,7 +68,7 @@ struct ControlView: View {
                 Button("Quit") { NSApplication.shared.terminate(nil) }
             }
             .padding(12)
-            .frame(width: 320)
+            .frame(width: 316, alignment: .leading)
     }
 
     private func slider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, _ fmt: String) -> some View {

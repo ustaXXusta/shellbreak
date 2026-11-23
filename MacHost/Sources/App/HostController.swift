@@ -291,10 +291,10 @@ final class HostController: ObservableObject {
     /// The control panel as a normal window on a virtual display, so the headset can operate it with the cursor.
     private func showControlWindow(on displayID: CGDirectDisplayID) {
         guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID }) else { return }
-        let size = NSSize(width: 420, height: min(760, screen.frame.height - 80))
+        let size = NSSize(width: 380, height: min(760, screen.visibleFrame.height - 60))
         let origin = NSPoint(x: screen.frame.midX - size.width / 2, y: screen.frame.midY - size.height / 2)
         if controlWindow == nil {
-            let w = NSWindow(contentRect: NSRect(origin: origin, size: size), styleMask: [.titled, .resizable, .miniaturizable],
+            let w = NSWindow(contentRect: NSRect(origin: origin, size: size), styleMask: [.titled, .resizable, .miniaturizable, .closable],
                              backing: .buffered, defer: false)
             w.title = "Shellbreak Kontrol"
             w.isReleasedWhenClosed = false

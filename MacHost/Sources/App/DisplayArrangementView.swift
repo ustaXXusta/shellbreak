@@ -6,7 +6,7 @@ import DesktopARShared
 struct DisplayArrangementView: View {
     @ObservedObject var host: HostController
     @State private var drag: [CGDirectDisplayID: CGSize] = [:]
-    private let canvas = CGSize(width: 320, height: 150)
+    private let canvas = CGSize(width: 292, height: 140)
     private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     private var union: CGRect { host.displays.map(\.bounds).reduce(CGRect.null) { $0.union($1) } }
@@ -43,7 +43,8 @@ struct DisplayArrangementView: View {
                 Button("Odadaki sıraya diz") { host.arrangeRow() }
                 Button("Yenile") { host.refreshDisplays() }
             }
-            Text("Ekranları sürükle: kenarları birleşince fare ve pencereler bir ekrandan diğerine geçer.").font(.caption2).foregroundStyle(.secondary)
+            Text("Ekranları sürükle: kenarları birleşince fare ve pencereler bir ekrandan diğerine geçer.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { host.refreshDisplays() }
         .onReceive(timer) { _ in host.refreshDisplays() }
