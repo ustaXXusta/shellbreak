@@ -17,6 +17,12 @@ final class InputModeController: @unchecked Sendable {
     private var cursorHidden = false
 
     var send: ((ControlMessage) -> Void)?
+    /// Layout mode needs a headset to show it; without a phone the exit key is passed through untouched.
+    var phoneConnected: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _phoneConnected }
+        set { lock.lock(); _phoneConnected = newValue; lock.unlock() }
+    }
+    private var _phoneConnected = false
     var onModeChange: ((InputModeState) -> Void)?
 
     var style: ExitKeyStyle {
@@ -110,7 +116,12 @@ final class InputModeController: @unchecked Sendable {
             switch action {
             case .pass: return Unmanaged.passUnretained(event)
             case .swallow: return nil
-            case .enterLayout: enterLayout(); return nil
+            case .enterLayout:
+                if !phoneConnected {
+                    lock.lock(); machine.forceScreen(); lock.unlock()
+                    return Unmanaged.passUnretained(event)
+                }
+                enterLayout(); return nil
             case .enterScreen: leaveLayout(notify: true); return nil
             case .layoutKey:
                 var len = 0; var buf = [UniChar](repeating: 0, count: 4)

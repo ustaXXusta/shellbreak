@@ -73,6 +73,7 @@ final class HostController: ObservableObject {
             server.onConnectionChange = { [weak self] up in
                 Task { @MainActor in
                     self?.phoneConnected = up
+                    self?.inputController.phoneConnected = up
                     if !up { self?.inputController.forceScreen() }   // never leave the Mac in layout mode without a headset
                 }
             }

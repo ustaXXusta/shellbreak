@@ -29,6 +29,7 @@ final class StreamModel: ObservableObject {
         connection.onState = { [weak self] s in
             Task { @MainActor in
                 self?.status = s
+                if s == "Bağlı" { self?.hud.flash("Bağlı · Esc: düzen modu", seconds: 3) }
                 if s.hasPrefix("Yeniden") { /* keep last frame on screen */ }
             }
         }
