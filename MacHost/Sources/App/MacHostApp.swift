@@ -6,7 +6,7 @@ struct MacHostApp: App {
     @StateObject private var host = HostController()
 
     var body: some Scene {
-        MenuBarExtra("Shellbreak", systemImage: "display.2") {
+        MenuBarExtra {
             Text("Shellbreak (protocol v\(ProtocolConstants.version))")
             Divider()
             permissionRow("Screen Recording", host.permissions.screenRecording, "Privacy_ScreenCapture")
@@ -23,6 +23,8 @@ struct MacHostApp: App {
             Toggle("Debug: ~/Desktop/stream.h265", isOn: $host.dumpToDesktop)
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
+        } label: {
+            Image("MenuBarIcon")
         }
     }
 
