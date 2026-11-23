@@ -2,6 +2,7 @@
 // usage: swift scripts/theme_preview.swift <outDir> [yawDegrees] [pitchDegrees]
 import Metal
 import simd
+import AppKit
 import Foundation
 import CoreGraphics
 import ImageIO
@@ -20,6 +21,23 @@ d.vertexFunction = lib.makeFunction(name: "quadVertex"); d.fragmentFunction = li
 d.colorAttachments[0].pixelFormat = .bgra8Unorm
 let pso = try dev.makeRenderPipelineState(descriptor: d)
 let q = dev.makeCommandQueue()!
+// Glyph atlas (same layout as the phone: 8×8 cells, digits, letters, half-width katakana).
+let glyphs = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌ")
+var atlasPx = [UInt8](repeating: 0, count: 512 * 512)
+do {
+    let cs = CGColorSpaceCreateDeviceGray()
+    let ctx = CGContext(data: &atlasPx, width: 512, height: 512, bitsPerComponent: 8, bytesPerRow: 512, space: cs, bitmapInfo: CGImageAlphaInfo.none.rawValue)!
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+    let font = NSFont.monospacedSystemFont(ofSize: 44, weight: .bold)
+    for (i, ch) in glyphs.enumerated() {
+        let str = NSAttributedString(string: String(ch), attributes: [.font: font, .foregroundColor: NSColor.white])
+        let sz = str.size()
+        str.draw(at: NSPoint(x: CGFloat(i % 8) * 64 + (64 - sz.width) / 2, y: CGFloat(i / 8) * 64 + (64 - sz.height) / 2))
+    }
+}
+let atd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: 512, height: 512, mipmapped: false)
+let atlasTex = dev.makeTexture(descriptor: atd)!
+atlasTex.replace(region: MTLRegionMake2D(0, 0, 512, 512), mipmapLevel: 0, withBytes: atlasPx, bytesPerRow: 512)
 let W = 640, H = 360
 var sheet = [UInt8](repeating: 0, count: W * 4 * H * 2 * 4)
 struct TP { var right: SIMD4<Float>; var up: SIMD4<Float>; var back: SIMD4<Float>; var tanY: Float; var aspect: Float; var time: Float; var theme: Int32 }
@@ -38,7 +56,7 @@ for theme in 1...8 {
     let cb = q.makeCommandBuffer()!; let enc = cb.makeRenderCommandEncoder(descriptor: rp)!
     var tp = TP(right: SIMD4(norm(right0), 0), up: SIMD4(norm(up0), 0), back: SIMD4(back, 0), tanY: Float(tan(90.0 * .pi / 360)), aspect: Float(W) / Float(H), time: 3.0, theme: Int32(theme))
     var sc = SIMD2<Float>(1, 1)
-    enc.setRenderPipelineState(pso); enc.setVertexBytes(&sc, length: 8, index: 0); enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0)
+    enc.setRenderPipelineState(pso); enc.setVertexBytes(&sc, length: 8, index: 0); enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0); enc.setFragmentTexture(atlasTex, index: 0)
     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
     var px = [UInt8](repeating: 0, count: W * H * 4)
     tex.getBytes(&px, bytesPerRow: W * 4, from: MTLRegionMake2D(0, 0, W, H), mipmapLevel: 0)

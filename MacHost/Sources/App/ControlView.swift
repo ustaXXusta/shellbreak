@@ -31,6 +31,8 @@ struct ControlView: View {
                         if p.kind == .virtual { Button("Kaldır") { Task { await host.removeVirtual(p.id) } } }
                     }
                 }
+                Text("Ekran düzeni").font(.headline)
+                DisplayArrangementView(host: host)
                 Button("Yeni ekran ekle") { Task { await host.addVirtual() } }.disabled(!host.streaming)
                 Button(host.streaming ? "Yayını durdur" : "Yayını başlat") {
                     Task { if host.streaming { await host.stop() } else { await host.start() } }
@@ -46,7 +48,7 @@ struct ControlView: View {
                 Text("Gözlük kalibrasyonu").font(.headline)
                 Toggle("Gerçek dünya (passthrough)", isOn: $host.passthrough)
                 Toggle("Test deseni (ızgara + artı)", isOn: $host.calibration.testPattern)
-                slider("Lens arası (mm)", $host.calibration.lensSeparationMm, 50...75, "%.1f")
+                slider("Lens arası (mm)", $host.calibration.lensSeparationMm, 20...75, "%.1f")
                 slider("Dikey kayma (mm)", $host.calibration.verticalOffsetMm, -15...15, "%.1f")
                 slider("k1", $host.calibration.k1, 0...1, "%.2f")
                 slider("k2", $host.calibration.k2, 0...1.5, "%.2f")

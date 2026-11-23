@@ -11,7 +11,9 @@ public struct LocalRect: Equatable {
 public enum PanelRegion: Equatable {
     case none
     case content(u: Double, v: Double)
-    case moveBar, resizeCorner, rotate, add, close, darken, theme
+    case moveBar, rotate, tilt, add, close, darken, theme
+    /// 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+    case resizeCorner(Int)
     case themeChoice(Int)
 }
 
@@ -24,11 +26,13 @@ public enum PanelHandleGeometry {
         let bw = max(0.15, min(0.6, width * 0.35))
         return LocalRect(cx: 0, cy: -h / 2 - 0.02 - 0.0175, w: bw, h: 0.035)
     }
-    public static func resizeCorner(width: Float, aspect: Float) -> LocalRect {
-        LocalRect(cx: width / 2, cy: -heightM(width: width, aspect: aspect) / 2, w: 0.08, h: 0.08)
+    /// The four resize corners (0.1 m squares centred on the panel corners): TL, TR, BL, BR.
+    public static func corners(width: Float, aspect: Float) -> [LocalRect] {
+        let hw = width / 2, hh = heightM(width: width, aspect: aspect) / 2
+        return [(-hw, hh), (hw, hh), (-hw, -hh), (hw, -hh)].map { LocalRect(cx: $0.0, cy: $0.1, w: 0.1, h: 0.1) }
     }
-    /// Rotate, Add, Close, Darken world, Theme — left to right above the panel.
-    public static let buttonCount = 5
+    /// Rotate, Tilt, Add, Close, Darken world, Theme — left to right above the panel.
+    public static let buttonCount = 6
     public static func buttons(width: Float, aspect: Float) -> [LocalRect] {
         let h = heightM(width: width, aspect: aspect)
         let size: Float = 0.06, step = size * 1.3
@@ -38,7 +42,7 @@ public enum PanelHandleGeometry {
     /// Theme colour circles in a row right above the theme button (index 0 = plain black).
     public static let themeCount = 9
     public static func themeCircles(width: Float, aspect: Float) -> [LocalRect] {
-        let btn = buttons(width: width, aspect: aspect)[4]
+        let btn = buttons(width: width, aspect: aspect)[5]
         let d: Float = 0.05, step: Float = 0.062
         let y = btn.cy + btn.h / 2 + 0.008 + d / 2
         // Row ends at the theme button's right edge so it stays within reach of the panel's top-right.
@@ -61,19 +65,20 @@ public enum PanelHandleGeometry {
         if pickerOpen {
             let c = themeCircles(width: width, aspect: aspect)
             for (i, r) in c.enumerated() where r.contains(x, y) { return .themeChoice(i) }
-            let btn = buttons(width: width, aspect: aspect)[4]
+            let btn = buttons(width: width, aspect: aspect)[5]
             let top = c[0].cy + c[0].h / 2
             let strip = LocalRect(cx: (c[0].cx - c[0].w / 2 + btn.cx + btn.w / 2) / 2, cy: (btn.cy + top) / 2,
                                   w: (btn.cx + btn.w / 2) - (c[0].cx - c[0].w / 2), h: top - btn.cy)
             if strip.contains(x, y) { return .theme }
         }
-        if resizeCorner(width: width, aspect: aspect).contains(x, y) { return .resizeCorner }
+        for (i, r) in corners(width: width, aspect: aspect).enumerated() where r.contains(x, y) { return .resizeCorner(i) }
         let b = buttons(width: width, aspect: aspect)
         if b[0].contains(x, y) { return .rotate }
-        if b[1].contains(x, y) { return .add }
-        if b[2].contains(x, y) { return .close }
-        if b[3].contains(x, y) { return .darken }
-        if b[4].contains(x, y) { return .theme }
+        if b[1].contains(x, y) { return .tilt }
+        if b[2].contains(x, y) { return .add }
+        if b[3].contains(x, y) { return .close }
+        if b[4].contains(x, y) { return .darken }
+        if b[5].contains(x, y) { return .theme }
         var bar = moveBar(width: width, aspect: aspect); bar.h += 0.02
         if bar.contains(x, y) { return .moveBar }
         let h = heightM(width: width, aspect: aspect)

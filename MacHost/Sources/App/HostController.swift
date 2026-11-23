@@ -22,6 +22,15 @@ struct PanelModel: Identifiable, Equatable {
     }
 }
 
+/// A macOS display as shown in the arrangement editor.
+struct DisplayItem: Identifiable, Equatable {
+    var id: CGDirectDisplayID
+    var name: String
+    var bounds: CGRect
+    var isMain: Bool
+    var isPanel: Bool
+}
+
 /// Thread-safe streamId → pipeline lookup for callbacks that run off the main actor.
 final class StreamRegistry: @unchecked Sendable {
     private let lock = NSLock()
@@ -43,6 +52,7 @@ final class HostController: ObservableObject {
     @Published var dumpToDesktop = false { didSet { updateDump() } }
     @Published var lastError: String?
     @Published var panels: [PanelModel] = []
+    @Published var displays: [DisplayItem] = []
     @Published var panelWidthM: Double = {
         let v = UserDefaults.standard.double(forKey: "panelWidthM"); return v > 0 ? v : 2.0
     }() { didSet {
@@ -172,6 +182,59 @@ final class HostController: ObservableObject {
         }
     }
 
+    // MARK: display arrangement (macOS layout = how the monitors stand in the room)
+
+    func refreshDisplays() {
+        var n: UInt32 = 0; CGGetActiveDisplayList(0, nil, &n)
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(n)); CGGetActiveDisplayList(n, &ids, &n)
+        let next = ids.map { id -> DisplayItem in
+            let panel = panels.first { $0.displayID == id }
+            let name = panel.map { $0.kind == .mirror ? "Ana ekran" : "Ekran \($0.desktopIndex)" } ?? (CGDisplayIsBuiltin(id) != 0 ? "Dahili" : "Harici")
+            return DisplayItem(id: id, name: name, bounds: CGDisplayBounds(id), isMain: id == CGMainDisplayID(), isPanel: panel != nil)
+        }
+        if next != displays { displays = next }
+    }
+
+    private func applyOrigins(_ origins: [CGDirectDisplayID: CGPoint]) {
+        var cfg: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&cfg) == .success, let cfg else { return }
+        for (id, o) in origins { CGConfigureDisplayOrigin(cfg, id, Int32(o.x.rounded()), Int32(o.y.rounded())) }
+        CGCompleteDisplayConfiguration(cfg, .forSession)
+        refreshDisplays()
+    }
+
+    /// Drop a display at `rect` (global points); it snaps to touch another display without overlapping.
+    func moveDisplay(_ id: CGDirectDisplayID, to rect: CGRect) {
+        guard id != CGMainDisplayID() else { return }
+        let others = displays.filter { $0.id != id }.map(\.bounds)
+        guard let r = DisplayLayout.snapped(moving: rect, others: others) else { return }
+        applyOrigins([id: r.origin])
+    }
+
+    /// Panels side by side in the order they stand in the room (left → right); other monitors go underneath.
+    func arrangeRow() {
+        refreshDisplays()
+        guard !panels.isEmpty else { return }
+        let positions: [SIMD3<Float>]? = panels.allSatisfy({ $0.transform?.count == 16 }) ? panels.map { p in
+            let t = p.transform ?? []; return SIMD3(t[12], t[13], t[14])
+        } : nil
+        var order = Array(panels.indices)
+        if let positions, let t0 = panels.first?.transform {
+            order = DisplayLayout.orderLeftToRight(positions: positions, right: SIMD3(t0[0], t0[1], t0[2]))
+        }
+        let ordered = order.map { panels[$0] }
+        let sizes = ordered.map { CGDisplayBounds($0.displayID).size }
+        let anchor = ordered.firstIndex { $0.displayID == CGMainDisplayID() } ?? 0
+        let o = DisplayLayout.row(sizes: sizes, anchor: anchor)
+        var origins: [CGDirectDisplayID: CGPoint] = [:]
+        for (i, p) in ordered.enumerated() { origins[p.displayID] = o[i] }
+        var x: CGFloat = 0
+        let below = sizes.map(\.height).max() ?? 900
+        for d in displays where !d.isPanel { origins[d.id] = CGPoint(x: x, y: below); x += d.bounds.width }
+        applyOrigins(origins)
+        hud("Ekranlar odadaki sıraya göre dizildi")
+    }
+
     // MARK: virtual displays
 
     func addVirtual() async {
@@ -195,6 +258,7 @@ final class HostController: ObservableObject {
         sendScene()
         hud("Ekran \(index) eklendi")
         showControlWindow(on: vd.displayID)
+        refreshDisplays()
     }
 
     func removeVirtual(_ id: String) async {
@@ -207,6 +271,7 @@ final class HostController: ObservableObject {
         if virtuals.isEmpty { controlWindow?.close(); controlWindow = nil }
         else if let d = virtuals.values.first?.displayID { showControlWindow(on: d) }
         sendScene()
+        refreshDisplays()
         hud("Ekran \(p.desktopIndex) kaldırıldı")
     }
 

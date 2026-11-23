@@ -151,7 +151,7 @@ static float3 lavaTheme(float a, float y, float t) {
     float3 n = normalize(float3(-g * 0.12, 1.0));
     float3 L = normalize(float3(-0.5, 0.65, 0.6));
     float diff = saturate(dot(n, L)), spec = pow(saturate(dot(reflect(-L, n), float3(0, 0, 1))), 28);
-    float depth = saturate((f - 1.0) * 0.1);
+    float depth = saturate((f - 1.0) * 0.012);
     float3 base = mix(float3(1.0, 0.27, 0.07), float3(0.5, 0.02, 0.05), depth);
     float3 c = base * (0.5 + 0.75 * diff) + spec * 0.8 + float3(1, 0.5, 0.2) * pow(1 - saturate(n.z), 2) * 0.25;
     return mix(bg, c, smoothstep(0.97, 1.05, f));
@@ -186,265 +186,622 @@ static float3 viceTheme(float a, float y, float t, float3 d) {
     return mix(sea, float3(1.0, 0.4, 0.35), exp(y * 22) * 0.8);
 }
 
-// ---- 3 rain
-static float3 rainTheme(float a, float y, float t, float3 d) {
-    float3 col;
-    float cl = fbm(float2(a * 1.6 + t * 0.02, y * 2.4 + 3));
-    float flashT = fract(t * 0.11); float flash = step(0.965, flashT) * (0.55 + 0.45 * sin(t * 55)) + step(0.9, fract(t * 0.11 + 0.5)) * step(fract(t * 0.11 + 0.5), 0.915) * 0.4;
-    if (y >= 0) {
-        col = mix(float3(0.16, 0.19, 0.24), float3(0.04, 0.05, 0.09), saturate(y * 1.4));
-        col *= 0.55 + cl * 0.9;
-        col += float3(0.7, 0.78, 1.0) * flash * (0.25 + cl * 0.8) * (1 - y * 0.5);
-        float lights = step(0.985, h21(floor(float2(a * 80, y * 80)))) * step(y, 0.05) * 0.8;
-        col += float3(1, 0.85, 0.5) * lights;
-    } else {
-        float2 p = d.xz / max(-y, 0.01);
-        float2 g = p * 1.1; float2 id = floor(g); float2 f = fract(g) - 0.5;
-        float ph = fract(t * 0.6 + h21(id)); float r = length(f);
-        float ring = smoothstep(0.035, 0.0, abs(r - ph * 0.55)) * (1 - ph);
-        float3 refl = mix(float3(0.05, 0.06, 0.09), float3(0.22, 0.27, 0.36), exp(y * 6));
-        col = refl + float3(0.5, 0.6, 0.8) * ring * exp(y * 2.5) * 0.9 + float3(0.7, 0.78, 1.0) * flash * 0.3;
-    }
-    float rr = rain(a, y, t, 55, 1.1, 0.16, 1) * 0.5 + rain(a, y, t, 90, 1.5, 0.16, 2) * 0.4 + rain(a, y, t, 140, 1.9, 0.16, 3) * 0.3;
-    col += float3(0.6, 0.7, 0.9) * rr;
-    return col;
-}
-
-// ---- 4 sunny
-static float3 sunnyTheme(float a, float y, float t, float3 d) {
-    float3 sunDir = normalize(float3(0.35, 0.5, -0.8)); float sd = saturate(dot(d, sunDir));
-    float3 col;
-    float hill1 = 0.015 + 0.06 * sin(a * 1.5 + 1) + 0.03 * sin(a * 4 + 2) + 0.012 * sin(a * 11);
-    float hill0 = 0.05 + 0.05 * sin(a * 2.2 + 4) + 0.025 * sin(a * 6 + 1);
-    if (y >= max(hill1, hill0)) {
-        col = mix(float3(0.85, 0.94, 1.0), float3(0.12, 0.45, 0.95), saturate(pow(y, 0.7) * 1.4));
-        col += float3(1.0, 0.92, 0.6) * pow(sd, 40) * 0.5 + float3(1.0, 0.95, 0.75) * pow(sd, 400) * 1.4;
-        col = mix(col, float3(1.0, 0.98, 0.85), smoothstep(0.9993, 0.9996, sd));
-        float2 cp = float2(a * 2.0 + t * 0.03, y * 5.0);
-        float c1 = fbm(cp), c2 = fbm(cp * 1.9 + 7 + t * 0.02);
-        float cm = smoothstep(0.52, 0.82, c1) * smoothstep(0.02, 0.25, y) * smoothstep(1.0, 0.45, y);
-        float3 cloudC = mix(float3(0.8, 0.85, 0.95), float3(1.0), saturate(c2 * 1.4 + (y * 3 - fract(cp.y)) * 0.0));
-        col = mix(col, cloudC, cm * 0.92);
-        return col;
-    }
-    if (y >= hill0 - 0.0 && hill0 > hill1) return mix(float3(0.45, 0.68, 0.62), float3(0.6, 0.78, 0.7), saturate((hill0 - y) * 10));
-    if (y >= 0.0 || hill1 > 0.0 && y >= -0.02) {
-        float tr = step(0.55, vnoise(float2(a * 140, 0))) * smoothstep(0.012, 0.0, y - hill1 + 0.012 * vnoise(float2(a * 140, 1)));
-        return mix(float3(0.35, 0.65, 0.25), float3(0.5, 0.8, 0.3), saturate((hill1 - y) * 8)) + tr * 0.0;
-    }
-    float2 p = d.xz / max(-y, 0.02);
-    float stripe = 0.5 + 0.5 * sin(p.y * 1.3 + 1);
-    float3 grass = mix(float3(0.22, 0.55, 0.16), float3(0.38, 0.72, 0.22), stripe);
-    float2 g = p * 5; float2 id = floor(g);
-    float fl = step(0.93, h21(id)) * smoothstep(0.22, 0.12, length(fract(g) - 0.5));
-    float3 fc = h21(id + 3) > 0.5 ? float3(1, 0.95, 0.3) : (h21(id + 9) > 0.5 ? float3(1, 0.45, 0.6) : float3(1));
-    grass = mix(grass, fc, fl);
-    return mix(grass, float3(0.7, 0.85, 0.85), exp(y * 10) * 0.7);
-}
-
-// ---- 5 matrix
-static float3 matrixTheme(float a, float y, float t) {
-    float3 col = float3(0.0, 0.015, 0.006);
+// ---- 5 matrix (real glyphs from an atlas: 8×8 cells of digits, letters and katakana)
+static float3 matrixTheme(float a, float y, float t, texture2d<float> atlas) {
+    constexpr sampler smp(filter::linear, address::clamp_to_edge);
+    float3 col = float3(0.0, 0.012, 0.005);
     for (int l = 0; l < 3; l++) {
-        float fl = float(l), sc = 34 + fl * 26, rows = sc * 1.8;
+        float fl = float(l), sc = 30 + fl * 26, rows = sc * 0.62;
         float colId = floor(a * sc), h = h11(colId + fl * 13.7);
-        float speed = 0.5 + 1.4 * h;
-        float s = fract(y * 0.8 + 0.5 + t * speed * 0.22 + h * 7.0);
-        float2 cuv = float2(fract(a * sc), fract(y * rows)); float2 cid = float2(colId, floor(y * rows));
-        float seed = h21(cid + floor(t * speed * 4.0) + fl * 5.0);
-        float2 gp = floor(cuv * float2(3, 5)); float bit = step(0.48, h21(gp + seed * 37.0));
-        float mask = step(0.14, cuv.x) * step(cuv.x, 0.86) * step(0.1, cuv.y) * step(cuv.y, 0.9);
-        float active = step(0.22, h11(colId * 3.7 + fl)); float trail = pow(saturate(1 - s), 2.4);
-        float g = trail * bit * mask * active;
-        float head = smoothstep(0.035, 0.0, s) * mask * active * (0.5 + 0.5 * bit);
-        col += float3(0.1, 1.0, 0.38) * g * (1.0 - fl * 0.28) + float3(0.75, 1.0, 0.85) * head * (1.0 - fl * 0.25);
+        float speed = 0.5 + 1.3 * h;
+        float s = fract(y * 0.6 + 0.5 + t * speed * 0.2 + h * 7.0);
+        float2 cuv = float2(fract(a * sc), fract(y * rows)); float rowId = floor(y * rows);
+        float churn = floor(t * (0.6 + 1.6 * h11(colId * 1.3 + rowId)) );
+        float gi = floor(h21(float2(colId, rowId) + churn * 3.1 + fl * 5.0) * 64.0);
+        float2 auv = (float2(fmod(gi, 8.0), floor(gi / 8.0)) + float2(0.1 + cuv.x * 0.8, 0.06 + (1.0 - cuv.y) * 0.88)) / 8.0;
+        float g = atlas.sample(smp, auv).r;
+        float active = step(0.2, h11(colId * 3.7 + fl));
+        float trail = pow(saturate(1 - s), 2.2);
+        float head = smoothstep(0.045, 0.0, s);
+        col += float3(0.1, 1.0, 0.38) * g * trail * active * (1.0 - fl * 0.28);
+        col += float3(0.8, 1.0, 0.9) * g * head * active * (1.0 - fl * 0.25);
+        col += float3(0.0, 0.25, 0.08) * g * 0.05 * active;   // ghost glyphs below the head
     }
-    col += float3(0.0, 0.07, 0.03) * smoothstep(-0.2, 1.0, y) * 0.5;
+    col += float3(0.0, 0.05, 0.02) * smoothstep(-0.2, 1.0, y) * 0.4;
     return col;
 }
 
-// ---- 6 cyberpunk
-static float3 cyberSky(float a, float y, float t) {
-    float h = max(y, 0.0);
-    float3 col = mix(float3(1.0, 0.18, 0.55), mix(float3(0.35, 0.05, 0.5), float3(0.02, 0.01, 0.12), smoothstep(0.15, 0.8, h)), smoothstep(0.0, 0.3, h));
-    float2 mv = float2(adiff(a, 0.9), y - 0.32); float mr = length(mv);
-    col += float3(0.8, 0.3, 1.0) * exp(-mr * 6) * 0.5;
-    col = mix(col, mix(float3(1.0, 0.6, 0.9), float3(0.55, 0.2, 0.9), smoothstep(-0.12, 0.12, mv.y)), smoothstep(0.125, 0.12, mr));
-    col += float(step(0.997, h21(floor(float2(a * 90, y * 90))))) * smoothstep(0.4, 0.8, h) * 0.7;
-    for (int L = 0; L < 3; L++) {
-        float fL = float(L), sc = 20 + fL * 14, base = 0.05 + (2 - fL) * 0.03;
-        float aa = a + fL * 0.37; float cell = floor(aa * sc); float hh = h11(cell + fL * 31);
-        float bh = base + hh * hh * (0.3 - fL * 0.06) + (h11(cell + 5) > 0.9 ? 0.12 : 0);
-        float fog = 0.35 + 0.65 * fL / 2.0;
-        if (y < bh && y >= 0) {
-            float2 wc = floor(float2(aa * sc * 6, y * 70)); float lit = step(0.62, h21(wc + fL * 9)) * step(0.15, fract(aa * sc * 6)) * step(0.2, fract(y * 70));
-            lit *= 0.7 + 0.3 * sin(t * 2 + h21(wc) * 20);
-            float3 neon = h11(cell + 9) > 0.5 ? float3(1.0, 0.1, 0.65) : float3(0.1, 0.9, 1.0);
-            float3 b = mix(float3(0.25, 0.08, 0.35), float3(0.03, 0.01, 0.08), fog) * (0.6 + 0.4 * (1 - fog));
-            b += neon * lit * 0.8 * fog;
-            float edge = smoothstep(bh - 0.006, bh, y);
-            b += neon * edge * 0.9;
-            float sign = step(0.88, h11(cell + 77)) * step(0.35, fract(aa * sc)) * step(fract(aa * sc), 0.5) * step(0.4 * bh, y) * step(y, 0.85 * bh);
-            b += mix(float3(1, 0.1, 0.4), float3(0.1, 1, 0.9), h11(cell + 3)) * sign * (0.7 + 0.3 * sin(t * 6 + cell));
-            col = mix(col, b, 1.0);
-        }
-    }
-    return col;
-}
-static float3 cyberTheme(float a, float y, float t, float3 d) {
-    if (y >= 0) return cyberSky(a, y, t);
-    float2 p = d.xz / max(-y, 0.01);
-    float2 g = abs(fract(p * 0.4 + float2(0, t * 0.5)) - 0.5);
-    float line = smoothstep(0.045, 0.0, min(g.x, g.y)) * exp(y * 2.2);
-    float3 floorC = mix(float3(0.02, 0.0, 0.07), float3(0.2, 0.03, 0.3), exp(y * 6));
-    float3 reflc = cyberSky(a + sin(p.y * 2 + t) * 0.004, -y, t) * 0.5 * exp(y * 3.0);
-    float3 neon = mix(float3(0.0, 0.95, 1.0), float3(1.0, 0.15, 0.7), 0.5 + 0.5 * sin(p.x * 0.2));
-    return floorC + reflc + neon * line * 0.9;
-}
-
-// ---- 7 steampunk
+// ---- gears (steampunk facades)
 static float4 gear(float2 p, float R, float teeth, float rot, float spokes) {
     float r = length(p), ang = atan2(p.y, p.x) + rot;
     float tooth = smoothstep(-0.25, 0.25, sin(ang * teeth));
     float rim = R * (1.0 + 0.13 * tooth);
-    float outer = smoothstep(rim, rim - 0.003, r);
+    float outer = smoothstep(rim, rim - 0.01 * R, r);
     float ring = outer * smoothstep(R * 0.72, R * 0.76, r);
     float arms = outer * step(r, R * 0.76) * smoothstep(0.075, 0.04, abs(sin(ang * spokes)) * r / R);
     float hub = smoothstep(R * 0.22, R * 0.2, r);
     float mask = max(ring, max(arms, hub));
-    float shade = 0.62 + 0.38 * smoothstep(R * 0.72, R * 1.1, r) + 0.18 * cos(ang * 1.0 - 0.7);
+    float shade = 0.62 + 0.38 * smoothstep(R * 0.72, R * 1.1, r) + 0.18 * cos(ang - 0.7);
     shade *= 1.0 - smoothstep(R * 0.07, R * 0.05, r) * 0.9;
-    shade *= 1.0 - 0.45 * smoothstep(rim - 0.012, rim, r);
+    shade *= 1.0 - 0.45 * smoothstep(rim - 0.04 * R, rim, r);
     return float4(mask, shade, 0, 0);
 }
-static float3 steamTheme(float a, float y, float t) {
-    float3 wall = mix(float3(0.28, 0.16, 0.08), float3(0.5, 0.31, 0.15), saturate(y * 0.5 + 0.5));
-    float2 pg = float2(a / 0.42, y / 0.34); float2 cellf = fract(pg);
-    float seam = smoothstep(0.03, 0.0, min(min(cellf.x, 1 - cellf.x) * 0.42, min(cellf.y, 1 - cellf.y) * 0.34 * 1.2));
-    wall *= 0.8 + 0.3 * vnoise(pg * 6);
-    wall = mix(wall, float3(0.08, 0.04, 0.02), seam * 0.8);
-    float2 rv = (cellf - float2(0.08, 0.1)); float rivet = smoothstep(0.045, 0.02, length(float2(rv.x * 0.42, rv.y * 0.34) * 2.4));
-    float2 rv2 = (cellf - float2(0.92, 0.1)); rivet += smoothstep(0.045, 0.02, length(float2(rv2.x * 0.42, rv2.y * 0.34) * 2.4));
-    wall += float3(0.7, 0.5, 0.25) * rivet * 0.6;
-    float lamp = exp(-length(float2(adiff(a, -0.3) * 1.2, y - 0.2)) * 2.2);
-    wall += float3(1.0, 0.6, 0.2) * lamp * 0.35;
-    float3 col = wall;
-    float gy[2] = { 0.52, -0.42 }; 
-    for (int k = 0; k < 2; k++) {
-        float yy = (y - gy[k]) / 0.07; if (abs(yy) < 1) {
-            float cyl = sqrt(1 - yy * yy);
-            float3 pc = mix(float3(0.35, 0.16, 0.08), float3(0.95, 0.6, 0.32), pow(cyl, 1.6)) * (0.8 + 0.2 * sin(a * 40 * 0 + 0));
-            float fl = smoothstep(0.03, 0.0, abs(fract(a / 0.9 + 0.3 * k) - 0.5) - 0.035);
-            pc = mix(pc, float3(0.55, 0.35, 0.18) * (0.6 + 0.5 * cyl), fl);
-            col = pc;
+
+// ---- street café scenes (3 rain, 4 sunny, 6 cyberpunk, 7 steampunk, 8 solarpunk)
+// You sit at a café table on the right pavement of a street that runs along -Z. Eye at origin, ground at y = GY.
+constant float GY = -1.15;
+constant float XN = 5.5;
+constant float XF = 13.0;
+
+static float3 fogColor(int th) {
+    switch (th) { case 3: return float3(0.07, 0.08, 0.11); case 4: return float3(0.80, 0.88, 0.95); case 6: return float3(0.30, 0.05, 0.34);
+                  case 7: return float3(0.78, 0.52, 0.32); default: return float3(0.80, 0.93, 0.88); }
+}
+static float fogK(int th) {
+    switch (th) { case 3: return 0.04; case 4: return 0.012; case 6: return 0.032; case 7: return 0.028; default: return 0.012; }
+}
+static float cellW(int th) { switch (th) { case 3: return 6.0; case 4: return 5.0; case 6: return 7.0; case 7: return 6.5; default: return 8.0; } }
+static float bHeight(float u, float side, int layer, int th) {
+    float cw = cellW(th); float c = floor(u / cw) + side * 31.0 + float(layer) * 17.0;
+    float hh = h11(c * 1.7 + 3.0);
+    float base = layer == 0 ? 7.0 : 14.0, range = layer == 0 ? 8.0 : 16.0;
+    if (th == 4) { base = layer == 0 ? 8.0 : 11.0; range = layer == 0 ? 3.0 : 5.0; }
+    if (th == 8) { base = layer == 0 ? 9.0 : 16.0; range = layer == 0 ? 8.0 : 14.0; }
+    return base + hh * range;
+}
+
+static float3 skyStreet(float3 d, float t, int th) {
+    float a = atan2(d.x, -d.z), y = d.y;
+    float cl = fbm(float2(a * 1.6 + t * 0.02, y * 3.0 + 2.0));
+    switch (th) {
+    case 3: {
+        float3 c = mix(float3(0.20, 0.17, 0.20), float3(0.05, 0.06, 0.10), saturate(y * 1.3));
+        c *= 0.55 + cl * 0.9;
+        float flashT = fract(t * 0.11);
+        float flash = step(0.965, flashT) * (0.55 + 0.45 * sin(t * 55));
+        return c + float3(0.7, 0.78, 1.0) * flash * (0.25 + cl * 0.8);
+    }
+    case 4: {
+        float3 c = mix(float3(0.82, 0.92, 1.0), float3(0.14, 0.46, 0.95), saturate(pow(max(y, 0.0), 0.6) * 1.5));
+        float3 sunDir = normalize(float3(0.45, 0.7, -0.55)); float sd = saturate(dot(d, sunDir));
+        c += float3(1.0, 0.9, 0.6) * pow(sd, 30) * 0.6 + float3(1.0, 0.97, 0.8) * smoothstep(0.9993, 0.9997, sd);
+        c = mix(c, float3(1.0), smoothstep(0.5, 0.82, cl) * smoothstep(0.1, 0.4, y) * 0.9);
+        for (int b = 0; b < 5; b++) {   // birds
+            float fb = float(b); float ba = adiff(a, fract(t * (0.012 + fb * 0.003) + fb * 0.21) * 6.2832 - 3.1416);
+            float2 q = float2(ba * 9.0, (y - 0.55 - fb * 0.07) * 9.0);
+            float flap = sin(t * 9 + fb * 2.0) * 0.35;
+            float bird = smoothstep(0.07, 0.0, abs(q.y - (abs(q.x) * (0.7 + flap) - 0.1)) ) * step(abs(q.x), 0.45);
+            c = mix(c, float3(0.1), bird * 0.9);
+        }
+        return c;
+    }
+    case 6: {
+        float3 c = mix(float3(0.55, 0.06, 0.45), float3(0.03, 0.0, 0.10), saturate(pow(max(y, 0.0), 0.6) * 1.6));
+        c += float3(0.5, 0.2, 0.8) * cl * 0.15 * saturate(y * 2);
+        for (int l = 0; l < 3; l++) {   // flying traffic lanes
+            float fl = float(l); float ey = 0.28 + fl * 0.14;
+            float cellN = 24.0 + fl * 10.0; float aa = a * cellN / 6.2832 + t * (0.6 + fl * 0.3) * (l == 1 ? -1.0 : 1.0);
+            float cid = floor(aa); float on = step(0.6, h11(cid + fl * 7.0));
+            float tail = smoothstep(0.0, 0.9, fract(aa)) * smoothstep(1.0, 0.85, fract(aa));
+            float lane = smoothstep(0.012, 0.0, abs(y - ey)) * tail * on;
+            float3 lc = l == 1 ? float3(1.0, 0.1, 0.3) : float3(0.2, 0.9, 1.0);
+            c += lc * lane * 1.6;
+        }
+        float beam = pow(saturate(1 - abs(adiff(a, 2.2 + sin(t * 0.3) * 0.5) * 3.0)), 3.0) * smoothstep(0.0, 0.6, y);
+        return c + float3(0.5, 0.8, 1.0) * beam * 0.18;
+    }
+    case 7: {
+        float3 c = mix(float3(0.98, 0.62, 0.3), float3(0.30, 0.26, 0.42), saturate(pow(max(y, 0.0), 0.6) * 1.5));
+        c = mix(c, float3(1.0, 0.85, 0.6), smoothstep(0.5, 0.85, cl) * 0.5 * smoothstep(0.1, 0.5, y));
+        for (int k = 0; k < 3; k++) {   // airships
+            float fk = float(k);
+            float a0 = fract(t * (0.006 + fk * 0.002) + fk * 0.33) * 6.2832 - 3.1416, el = 0.42 + fk * 0.17;
+            float2 q = float2(adiff(a, a0), y - el);
+            float L = 0.2 - fk * 0.04, H = 0.055 - fk * 0.01;
+            float env = smoothstep(1.0, 0.94, length(float2(q.x / L, q.y / H)));
+            float3 ec = mix(float3(0.35, 0.2, 0.12), float3(0.85, 0.6, 0.3), saturate(0.5 + q.y / H * 0.6));
+            ec *= 0.8 + 0.2 * step(0.5, fract(q.x / L * 6.0));
+            float fin = smoothstep(0.02, 0.0, abs(q.x + L * 0.95) - 0.012) * step(abs(q.y), H * 1.3);
+            float gond = step(abs(q.x), L * 0.25) * step(-H * 1.5, q.y) * step(q.y, -H * 0.9);
+            float prop = smoothstep(0.012, 0.0, abs(q.x + L * 1.08)) * step(abs(q.y), H * 0.6) * (0.5 + 0.5 * sin(t * 40));
+            c = mix(c, ec, max(env, max(fin, gond * 0.0)));
+            c = mix(c, float3(0.15, 0.08, 0.05), gond);
+            c = mix(c, float3(0.9, 0.8, 0.6), prop * 0.5);
+        }
+        return c;
+    }
+    default: {
+        float3 c = mix(float3(0.95, 0.97, 0.85), float3(0.30, 0.78, 0.92), saturate(pow(max(y, 0.0), 0.6) * 1.5));
+        float3 sunDir = normalize(float3(-0.35, 0.75, -0.55)); float sd = saturate(dot(d, sunDir));
+        c += float3(1.0, 0.95, 0.6) * pow(sd, 30) * 0.5 + float3(1.0, 0.97, 0.8) * smoothstep(0.9992, 0.9996, sd);
+        c = mix(c, float3(1.0), smoothstep(0.55, 0.85, cl) * smoothstep(0.1, 0.4, y) * 0.8);
+        for (int k = 0; k < 4; k++) {   // drones / kites
+            float fk = float(k); float a0 = fract(t * 0.01 * (1 + fk * 0.4) + fk * 0.27) * 6.2832 - 3.1416;
+            float2 q = float2(adiff(a, a0), y - 0.45 - fk * 0.1);
+            float body = smoothstep(0.012, 0.006, length(q * float2(1, 1.6)));
+            float blink = 0.5 + 0.5 * sin(t * 4 + fk * 3);
+            c = mix(c, float3(0.2, 0.6, 0.3), body);
+            c += float3(1.0, 0.9, 0.3) * smoothstep(0.02, 0.0, length(q + float2(0, 0.01))) * blink * 0.6;
+        }
+        return c;
+    }
+    }
+}
+
+// Glyph from the atlas (index 0-63) inside a unit cell; returns coverage.
+static float glyphAt(texture2d<float> atlas, float idx, float2 uv) {
+    constexpr sampler smp(filter::linear, address::clamp_to_edge);
+    float2 auv = (float2(fmod(idx, 8.0), floor(idx / 8.0)) + float2(0.08 + uv.x * 0.84, 0.05 + (1.0 - uv.y) * 0.9)) / 8.0;
+    return atlas.sample(smp, auv).r;
+}
+
+// A window: x/y inside its cell. Returns rgb (glass + frame) and alpha (coverage).
+static float4 windowPane(float2 w, float hsh, float t, int th, float lit, float2 world) {
+    float2 gmin = float2(0.28, 0.30), gmax = float2(0.72, 0.82);
+    if (th == 7) { gmin = float2(0.3, 0.25); gmax = float2(0.7, 0.85); }
+    if (th == 8) { gmin = float2(0.12, 0.3); gmax = float2(0.88, 0.8); }
+    float2 g = (w - gmin) / (gmax - gmin);
+    float inGlass = step(0.0, g.x) * step(g.x, 1.0) * step(0.0, g.y) * step(g.y, 1.0);
+    float2 fr = (w - gmin + 0.035) / (gmax - gmin + 0.07);
+    float inFrame = step(0.0, fr.x) * step(fr.x, 1.0) * step(0.0, fr.y) * step(fr.y, 1.0);
+    if (th == 7) {   // arched top
+        float arch = step(g.y, 0.72 + 0.28 * sqrt(max(0.0, 1.0 - pow(g.x * 2.0 - 1.0, 2.0))));
+        inGlass *= arch; inFrame *= step(fr.y, 0.74 + 0.3 * sqrt(max(0.0, 1.0 - pow(fr.x * 2.0 - 1.0, 2.0))));
+    }
+    if (inFrame < 0.5) return float4(0);
+    float3 frameC = th == 6 ? float3(0.02, 0.02, 0.04) : (th == 7 ? float3(0.55, 0.32, 0.12) : (th == 3 ? float3(0.06, 0.05, 0.05) : float3(0.95, 0.95, 0.92)));
+    if (inGlass < 0.5) return float4(frameC, 1);
+    float mull = max(smoothstep(0.03, 0.0, abs(g.x - 0.5)), smoothstep(0.03, 0.0, abs(g.y - 0.55)));
+    float3 glass;
+    float lx = hsh;
+    if (th == 3 || th == 7 || (th == 6 && lit > 0.5)) {
+        float3 warm = th == 6 ? mix(float3(0.1, 0.8, 1.0), float3(1.0, 0.2, 0.7), step(0.5, hsh)) : (th == 7 ? float3(1.0, 0.62, 0.25) : float3(1.0, 0.72, 0.38));
+        float curtain = 1.0 - 0.45 * step(g.y, 0.45) * smoothstep(0.1, 0.5, abs(sin(g.x * 9.0 + hsh * 6.0)));   // curtains/blinds
+        float glow = 0.5 + 0.6 * smoothstep(0.0, 1.0, g.y);
+        float flick = 0.85 + 0.15 * sin(t * 2.0 + hsh * 40.0);
+        glass = (lit > 0.5 ? warm : float3(0.04, 0.06, 0.1)) * glow * curtain * flick * (0.55 + 0.7 * hsh);
+        if (lit < 0.5) glass = mix(float3(0.03, 0.05, 0.09), float3(0.14, 0.18, 0.26), g.y);
+    } else if (th == 6) {
+        glass = mix(float3(0.02, 0.03, 0.06), float3(0.08, 0.12, 0.2), g.y);
+    } else {
+        // daylight: sky reflection + dark interior
+        float3 sky = mix(float3(0.78, 0.9, 1.0), float3(0.3, 0.55, 0.85), g.y);
+        float inter = 0.35 + 0.3 * smoothstep(0.0, 1.0, 1.0 - g.y);
+        glass = mix(float3(0.1, 0.14, 0.17) * inter * 2.0, sky, 0.55 * smoothstep(0.1, 0.8, g.y + 0.2 * sin(g.x * 3.0 + hsh * 6.0)));
+        if (th == 8) glass = mix(float3(0.1, 0.45, 0.55), float3(0.7, 0.95, 0.98), pow(g.y, 1.3));
+    }
+    glass = mix(glass, frameC, mull * (th == 8 ? 0.0 : 1.0));
+    return float4(glass, 1);
+}
+
+static float3 facadeCol(float u, float v, float side, int layer, float t, int th, float dist, texture2d<float> atlas) {
+    float cw = cellW(th);
+    float cell = floor(u / cw) + side * 31.0 + float(layer) * 17.0;
+    float hh = h11(cell * 1.7 + 3.0), h2 = h11(cell * 2.9 + 1.0), h3 = h11(cell * 4.1 + 7.0);
+    float H = bHeight(u, side, layer, th);
+    float fu = u / cw - floor(u / cw);
+    float floorH = 3.0, ww = (th == 8 ? 3.4 : 2.4);
+    float lit = (side < 0) ? 1.0 : 0.6;
+    float2 wid = float2(floor(u / ww), floor(v / floorH));
+    float2 wxy = float2(fract(u / ww), fract(v / floorH));
+    bool shop = v < floorH + 0.3;
+    float winHash = h21(wid + cell * 3.0);
+    float on = step(th == 6 ? 0.45 : 0.55, winHash);
+    float3 col;
+    // shop signs share a layout: a board above the door row
+    float signBand = step(floorH - 0.1, v) * step(v, floorH + 0.65);
+    switch (th) {
+    case 3: {
+        float2 br = float2(u * 3.2 + floor(v * 8.0) * 0.5, v * 8.0);
+        float mortar = step(0.07, fract(br.x)) * step(0.1, fract(br.y));
+        col = mix(float3(0.04), mix(float3(0.19, 0.09, 0.08), float3(0.3, 0.15, 0.11), h21(floor(br))), mortar) * (0.5 + 0.6 * vnoise(float2(u, v) * 0.8));
+        break;
+    }
+    case 4: {
+        float3 pal[4] = { float3(0.97, 0.86, 0.64), float3(0.93, 0.7, 0.5), float3(0.9, 0.56, 0.46), float3(0.96, 0.93, 0.82) };
+        col = pal[int(hh * 3.99)] * (0.88 + 0.12 * vnoise(float2(u, v) * 3.0)) * lit;
+        break;
+    }
+    case 6: col = float3(0.035, 0.035, 0.06) * (0.6 + vnoise(float2(u, v) * 0.7)); break;
+    case 7: {
+        float2 br = float2(u * 2.4 + floor(v * 4.5) * 0.5, v * 4.5);
+        float mortar = step(0.05, fract(br.x)) * step(0.08, fract(br.y));
+        col = mix(float3(0.12, 0.08, 0.06), mix(float3(0.46, 0.3, 0.2), float3(0.64, 0.43, 0.28), h21(floor(br))), mortar);
+        break;
+    }
+    default: {
+        col = float3(0.94, 0.97, 0.93) * (0.7 + 0.3 * lit);
+        float band = smoothstep(0.08, 0.0, abs(wxy.y - 0.12));
+        col = mix(col, float3(0.72, 0.84, 0.78), band * 0.6);
+        float garden = smoothstep(0.5, 0.62, fbm(float2(u * 0.6, v * 0.6) + cell * 3.0));
+        float3 leaf = mix(float3(0.1, 0.42, 0.14), float3(0.5, 0.82, 0.25), vnoise(float2(u, v) * 7.0));
+        col = mix(col, leaf * (0.7 + 0.3 * lit), garden * (shop ? 0.3 : 0.95));
+        break;
+    }
+    }
+    // upper-floor windows
+    if (!shop && v < H - 0.8) {
+        float4 w = windowPane(wxy, winHash, t, th, on, float2(u, v));
+        if (w.a > 0.5) col = w.rgb * (th == 4 || th == 8 ? (0.75 + 0.25 * lit) : 1.0);
+        if (th == 4) {   // shutters + flower boxes
+            float shut = (step(0.14, wxy.x) * step(wxy.x, 0.26) + step(0.74, wxy.x) * step(wxy.x, 0.86)) * step(0.3, wxy.y) * step(wxy.y, 0.82);
+            col = mix(col, h2 > 0.5 ? float3(0.18, 0.5, 0.34) * lit : float3(0.25, 0.4, 0.72) * lit, shut * (1.0 - w.a));
+            float box = step(0.22, wxy.x) * step(wxy.x, 0.78) * step(0.2, wxy.y) * step(wxy.y, 0.3);
+            float3 fl = h21(floor(float2(u * 9.0, v * 9.0))) > 0.45 ? float3(0.95, 0.25, 0.4) : float3(0.25, 0.65, 0.25);
+            col = mix(col, fl, box);
+        }
+        if (th == 8) {   // balcony rails
+            col = mix(col, float3(0.2, 0.55, 0.25), step(0.25, wxy.y) * step(wxy.y, 0.3) * 0.8);
         }
     }
-    float4 gd[6] = { float4(-1.9, 0.18, 0.28, 12), float4(-0.95, -0.03, 0.2, 9), float4(0.0, 0.2, 0.34, 14), float4(1.05, -0.12, 0.24, 10), float4(1.95, 0.22, 0.3, 12), float4(2.8, -0.05, 0.22, 9) };
-    for (int i = 0; i < 6; i++) {
-        float2 p = float2(adiff(a, gd[i].x), y - gd[i].y);
-        if (abs(p.x) > gd[i].z * 1.3 || abs(p.y) > gd[i].z * 1.3) continue;
-        float dirn = (i % 2 == 0) ? 1.0 : -1.0;
-        float4 gr = gear(p, gd[i].z, gd[i].w, t * 0.35 * dirn * (1.0 / (1.0 + float(i) * 0.15)) + float(i), 3.0);
-        float3 gc = mix(float3(0.42, 0.22, 0.09), float3(1.0, 0.78, 0.38), saturate(gr.y));
-        col = mix(col, gc, gr.x);
+    // roofline, cornice, extras
+    if (th == 4 && v > H - 1.0) col = float3(0.78, 0.36, 0.2) * (0.85 + 0.15 * step(0.5, fract(u * 4.0))) * lit;
+    if (th == 7 && v > H - 0.7) col = float3(0.25, 0.12, 0.08);
+    if (th == 3 && v > H - 0.4) col *= 0.5;
+    if (th == 8 && v > H - 1.4) {
+        float2 g = abs(fract(float2(u * 0.7, v * 0.9)) - 0.5);
+        col = mix(float3(0.08, 0.14, 0.38), float3(0.25, 0.42, 0.72), smoothstep(0.45, 0.35, max(g.x, g.y))) * (0.7 + 0.5 * lit);
     }
-    float2 gp = float2(adiff(a, 0.75), y - 0.22); float gr = length(gp);
-    float dial = smoothstep(0.14, 0.135, gr);
-    float3 dc = float3(0.95, 0.9, 0.78) * (1 - smoothstep(0.09, 0.14, gr) * 0.3);
-    float ga = atan2(gp.y, gp.x);
-    float ticks = step(0.5, fract((ga + 3.14159) * 5.0)) * step(0.1, gr) * step(gr, 0.125) * step(abs(ga), 2.4) * step(-2.4, ga);
-    dc = mix(dc, float3(0.1), ticks);
-    float need = -0.4 + sin(t * 0.7) * 1.1; float nd = abs(sin(ga - (need + 3.14159 * 0)) ) * gr;
-    dc = mix(dc, float3(0.7, 0.05, 0.05), step(nd, 0.006) * step(cos(ga - need), 0.0 - 0.0 + 1.0) * step(gr, 0.1) * step(0.0, cos(ga - need)));
-    col = mix(col, dc, dial);
-    col = mix(col, float3(0.9, 0.6, 0.25), smoothstep(0.012, 0.004, abs(gr - 0.145)) * 0.9 );
-    float steam = fbm(float2(a * 3.0, y * 2.5 - t * 0.25)) * smoothstep(-0.2, 0.9, y) * smoothstep(1.0, 0.3, y);
-    col += float3(0.95, 0.85, 0.7) * pow(steam, 2.0) * 0.45;
+    // shop fronts
+    if (shop) {
+        float2 sw = float2(fract(u / 3.2), v / floorH);
+        float door = step(0.08, sw.x) * step(sw.x, 0.28) * step(v, 2.4);
+        float glassArea = step(0.36, sw.x) * step(sw.x, 0.92) * step(0.28, v) * step(v, 2.4);
+        float3 interior;
+        switch (th) {
+        case 3: interior = mix(float3(0.6, 0.32, 0.12), float3(1.0, 0.78, 0.45), vnoise(float2(u * 4.0, v * 3.0))) * (0.55 + 0.5 * step(0.25, fract(v * 1.6))); break;
+        case 6: interior = mix(float3(0.9, 0.2, 0.7), float3(0.2, 0.9, 1.0), h2) * (0.35 + 0.5 * vnoise(float2(u * 5.0, v * 3.0))); break;
+        case 7: interior = mix(float3(0.55, 0.3, 0.1), float3(1.0, 0.7, 0.3), vnoise(float2(u * 4.0, v * 3.0))) * (0.6 + 0.4 * step(0.3, fract(v * 1.5))); break;
+        default: interior = mix(float3(0.25, 0.3, 0.32), float3(0.75, 0.88, 0.95), pow(v / 2.4, 1.2)); break;
+        }
+        float3 fr = th == 6 ? float3(0.02) : (th == 7 ? float3(0.45, 0.25, 0.1) : (th == 3 ? float3(0.05) : float3(0.35, 0.22, 0.14) * (th == 8 ? 0.0 : 1.0) + float3(0.9) * (th == 8 ? 1.0 : 0.0)));
+        col = mix(col, fr, step(0.05, sw.x) * step(sw.x, 0.95) * step(0.2, v) * step(v, 2.55));
+        col = mix(col, interior, glassArea);
+        col = mix(col, fr * 0.8 + float3(0.1, 0.06, 0.03), door);
+        if (th == 4 || th == 3 || th == 7) {  // little shop awning
+            float aw = step(0.05, sw.x) * step(sw.x, 0.95) * step(2.5, v) * step(v, 2.95);
+            float stripe = step(0.5, fract(u * 3.0));
+            float3 ac = th == 4 ? mix(float3(0.9, 0.2, 0.2), float3(1.0), stripe) : (th == 3 ? mix(float3(0.45, 0.05, 0.1), float3(0.15, 0.03, 0.06), stripe) : mix(float3(0.4, 0.12, 0.08), float3(0.8, 0.6, 0.25), stripe));
+            col = mix(col, ac * (th == 4 ? lit : 1.0), aw);
+        }
+    }
+    // shop signs with lettering from the atlas
+    if (signBand > 0.5) {
+        float sx = fract(u / 3.2); if (side < 0) sx = 1.0 - sx;
+        if (sx > 0.08 && sx < 0.92 && h3 > 0.25) {
+            float row = (v - (floorH - 0.1)) / 0.75;
+            float letters = 5.0; float lu = (sx - 0.08) / 0.84 * letters; float li = floor(lu);
+            float gi = floor(h21(float2(floor(u / 3.2) + side * 11.0, li) + 2.0) * (th == 6 ? 28.0 : 36.0)) + (th == 6 ? 36.0 : 0.0);
+            float g = glyphAt(atlas, gi, float2(fract(lu), row));
+            float3 board, ink;
+            switch (th) {
+            case 3: board = float3(0.03); ink = h2 > 0.5 ? float3(1.0, 0.2, 0.3) : float3(0.3, 1.0, 0.7); break;
+            case 6: board = float3(0.02, 0.02, 0.05); ink = h2 > 0.5 ? float3(1.0, 0.15, 0.6) : float3(0.1, 1.0, 0.9); break;
+            case 7: board = float3(0.25, 0.1, 0.04); ink = float3(1.0, 0.8, 0.4); break;
+            case 8: board = float3(0.2, 0.5, 0.3); ink = float3(1.0); break;
+            default: board = float3(0.3, 0.17, 0.1) * lit; ink = float3(1.0, 0.95, 0.85) * lit; break;
+            }
+            float3 sc = mix(board, ink * ((th == 3 || th == 6) ? 1.6 + 0.3 * sin(t * 9.0 + h2 * 20.0) : 1.0), g);
+            col = sc;
+        }
+    }
+    // per-theme extras
+    if (th == 6) {
+        float edge = smoothstep(0.06, 0.0, abs(fu - 0.02)) + smoothstep(0.06, 0.0, abs(fu - 0.98));
+        col += (h2 > 0.5 ? float3(1.0, 0.1, 0.5) : float3(0.1, 0.8, 1.0)) * edge * 0.5;
+        // tall vertical katakana sign
+        float sxp = ((side < 0 ? 1.0 - fu : fu) - 0.62) / 0.12;
+        if (sxp > 0.0 && sxp < 1.0 && v > 4.0 && v < H - 1.5 && h3 > 0.4) {
+            float rv = (v - 4.0) / 0.95; float ri = floor(rv);
+            float gi = 36.0 + floor(h21(float2(cell, ri)) * 27.0);
+            float g = glyphAt(atlas, gi, float2(sxp, fract(rv)));
+            float3 nc = h2 > 0.5 ? float3(1.0, 0.15, 0.55) : float3(0.1, 0.95, 1.0);
+            float flick = 0.75 + 0.25 * step(0.2, fract(t * 0.7 + cell * 0.37));
+            col = mix(col + nc * 0.08, nc * 1.7 * flick, g);
+            col += nc * smoothstep(0.35, 0.0, abs(sxp - 0.5)) * 0.1;
+        }
+        float bb = step(0.12, fu) * step(fu, 0.5) * step(7.0, v) * step(v, 11.0) * step(0.78, h2);   // hologram billboard
+        float scan = 0.65 + 0.35 * sin(v * 70.0 - t * 7.0);
+        float3 bc = mix(float3(1.0, 0.2, 0.6), float3(0.2, 0.9, 1.0), 0.5 + 0.5 * sin(t * 0.7 + cell));
+        bc *= 0.4 + 0.8 * vnoise(float2(fu * 14.0 + t * 0.5, v * 3.0 + t * 3.0));
+        col = mix(col, bc * scan * 1.3, bb);
+    }
+    if (th == 7 && v > floorH + 0.4) {
+        for (int p = 0; p < 2; p++) {   // brass pipes
+            float py = p == 0 ? 2.6 : 7.4; float cy = (v - py) / 0.2;
+            if (abs(cy) < 1.0) { float cyl = sqrt(1 - cy * cy); col = mix(float3(0.25, 0.1, 0.05), float3(1.0, 0.65, 0.3), pow(cyl, 1.5)) * (0.85 + 0.15 * step(0.5, fract(u * 0.5))); }
+        }
+        if (h2 > 0.4 && v > 5.0 && v < H - 1.0) {   // rotating gear or clock
+            float2 p = float2((fu - 0.5) * cw, v - min(8.2, H - 2.2));
+            float4 g = gear(p, 1.5, 14.0, t * 0.3 * (h3 > 0.5 ? 1.0 : -1.0), 3.0);
+            col = mix(col, mix(float3(0.35, 0.18, 0.08), float3(1.0, 0.75, 0.35), saturate(g.y)), g.x);
+        }
+    }
+    // ambient occlusion at the street level and a subtle top-light gradient
+    col *= 0.62 + 0.38 * smoothstep(0.0, 2.5, v);
     return col;
 }
 
-// ---- 8 solarpunk
-static float3 solarTheme(float a, float y, float t, float3 d) {
-    float3 col = mix(float3(1.0, 0.93, 0.62), float3(0.35, 0.8, 0.92), saturate(pow(max(y, 0.0), 0.6) * 1.5));
-    float2 sp = float2(adiff(a, 0.0), y - 0.32); float sr = length(sp); float ang = atan2(sp.y, sp.x);
-    col += float3(1.0, 0.9, 0.45) * (0.5 + 0.5 * sin(ang * 16 + t * 0.15)) * smoothstep(1.3, 0.0, sr) * 0.22;
-    col += float3(1.0, 0.85, 0.4) * exp(-sr * 5) * 0.5;
-    col = mix(col, float3(1.0, 0.88, 0.3), smoothstep(0.15, 0.14, sr));
-    float cl = smoothstep(0.55, 0.8, fbm(float2(a * 2.2 + t * 0.02, y * 6 + 4))) * smoothstep(0.1, 0.3, y);
-    col = mix(col, float3(1.0, 0.98, 0.92), cl * 0.55);
-    float hf = 0.05 + 0.04 * sin(a * 3 + 1) + 0.025 * sin(a * 7);
-    float hm = 0.0 + 0.05 * sin(a * 2.0 + 4) + 0.03 * sin(a * 5 + 2) + 0.012 * sin(a * 21);
-    if (y < hf && y >= 0) {
-        float3 hc = mix(float3(0.45, 0.72, 0.65), float3(0.55, 0.8, 0.7), saturate((hf - y) * 12));
-        col = hc; 
-        float tr = step(0.6, vnoise(float2(a * 120, 5))) * smoothstep(hf - 0.025, hf, y) * 0.0;
-        col -= tr;
-    }
-    for (int k = 0; k < 9; k++) {
-        float ca = (float(k) - 4.0) * 0.72 + 0.16 * h11(float(k) + 4);
-        float x = adiff(a, ca); float th = 0.22 + 0.2 * h11(float(k) + 11);
-        float w = 0.035 + 0.02 * h11(float(k) + 21) - 0.012 * saturate(y / th);
-        if (y < 0 || y > th + 0.05 || abs(x) > w + 0.05) continue;
-        float body = step(abs(x), w) * step(y, th);
-        float band = fract(y * 22 + h11(float(k)) * 3);
-        float over = step(0.78, band);
-        float lush = step(abs(x), w + 0.012 * over) * step(y, th) * over;
-        float3 tc = float3(0.97, 0.96, 0.9) * (0.82 + 0.2 * smoothstep(-w, w, x));
-        float win = step(0.2, fract(x * 150)) * step(0.8, 1 - abs(band * 2 - 1.1) ) * 0.0 + step(0.25, band) * step(band, 0.62) * step(0.35, fract(x * 150 + 0.5)) * 0.55;
-        tc = mix(tc, float3(0.2, 0.62, 0.75), win);
-        if (body > 0) col = tc;
-        if (lush > 0) col = mix(float3(0.16, 0.6, 0.2), float3(0.4, 0.8, 0.3), vnoise(float2(a * 400, y * 200)));
-        float roof = smoothstep(0.04, 0.0, length(float2(x * 0.8, y - th - 0.005)) - 0.026);
-        col = mix(col, float3(0.15, 0.58, 0.22), roof);
-        float panel = step(abs(x - 0.0), w * 1.25) * step(th + 0.03, y) * step(y, th + 0.04 + x * 0.1) ;
-        col = mix(col, float3(0.1, 0.2, 0.5), panel);
-    }
-    float2 tp = float2(adiff(a, -1.55), y - 0.17);
-    float pole = step(abs(tp.x), 0.003) * step(0.0, y) * step(y, 0.17);
-    float bl = 0;
-    for (int b = 0; b < 3; b++) {
-        float ba = t * 0.5 + float(b) * 2.094; float2 dirv = float2(cos(ba), sin(ba));
-        float proj = clamp(dot(tp, dirv), 0.0, 0.09); float dist = length(tp - dirv * proj);
-        bl = max(bl, step(dist, 0.004 * (1.2 - proj * 6)));
-    }
-    col = mix(col, float3(0.97), max(pole, bl));
-    float hmix = hm;
-    if (y < hmix) {
-        float3 gc = mix(float3(0.18, 0.55, 0.2), float3(0.35, 0.72, 0.28), saturate((hmix - y) * 7));
-        float tree = step(0.5, vnoise(float2(a * 90, 2))) * smoothstep(0.02, 0.0, y - hmix + 0.012 + 0.012 * vnoise(float2(a * 90, 7)));
-        gc = mix(gc, float3(0.08, 0.4, 0.15), tree);
-        col = gc;
-        if (y < -0.02) {
-            float2 p = d.xz / max(-y, 0.02); float2 g = p * 4; float2 id = floor(g);
-            float fl = step(0.9, h21(id)) * smoothstep(0.22, 0.1, length(fract(g) - 0.5));
-            float3 fc = h21(id + 3) > 0.5 ? float3(1, 0.85, 0.2) : float3(1, 0.5, 0.65);
-            col = mix(mix(float3(0.17, 0.5, 0.17), float3(0.3, 0.68, 0.25), 0.5 + 0.5 * sin(p.y * 1.2)), fc, fl);
-            col = mix(col, float3(0.75, 0.88, 0.7), exp(y * 9) * 0.6);
+static float3 streetBackdrop(float3 d, float t, int th, texture2d<float> atlas, thread float &tHit) {
+    float3 fog = fogColor(th);
+    tHit = 1e9;
+    float3 col = skyStreet(d, t, th);
+    if (abs(d.x) > 1e-3) {
+        float side = d.x < 0 ? -1.0 : 1.0;
+        for (int layer = 0; layer < 2; layer++) {
+            float tt = side * (layer == 0 ? XN : XF) / d.x;
+            if (tt <= 0) continue;
+            float3 P = d * tt; float v = P.y - GY;
+            if (v > 0 && v < bHeight(P.z, side, layer, th)) {
+                col = mix(fog, facadeCol(P.z, v, side, layer, t, th, tt, atlas), exp(-tt * fogK(th)));
+                tHit = tt; break;
+            }
         }
     }
-    float2 pc = float2(a * 14, y * 14 - t * 0.35); float2 pid = floor(pc);
-    float poll = step(0.93, h21(pid)) * smoothstep(0.2, 0.0, length(fract(pc) - 0.5 - 0.2 * float2(sin(t + h21(pid) * 6), 0)));
-    col += float3(1.0, 0.95, 0.5) * poll * 0.6;
+    if (tHit > 1e8) col = mix(col, fog, saturate(0.35 - d.y) * 0.5);   // haze toward the horizon
     return col;
 }
 
-static float3 themeColor(float3 d, float t, int theme) {
+static float cobble(float2 p, float scale) {
+    float2 q = p * scale; q.x += floor(q.y) * 0.5;
+    float2 f = fract(q); float edge = smoothstep(0.0, 0.1, min(min(f.x, 1 - f.x), min(f.y, 1 - f.y)));
+    return edge * (0.75 + 0.25 * h21(floor(q)));
+}
+
+static float3 groundStreet(float3 P, float3 d, float t, int th, float tg, texture2d<float> atlas) {
+    float3 fog = fogColor(th);
+    float2 xz = P.xz;
+    float3 col;
+    switch (th) {
+    case 3: {
+        float cb = cobble(xz, 4.5);
+        float puddle = smoothstep(0.45, 0.6, fbm(xz * 0.45 + 4.0));
+        float3 base = float3(0.06, 0.055, 0.06) * (0.5 + cb);
+        float tb;
+        float3 refl = streetBackdrop(float3(d.x, -d.y, d.z), t, th, atlas, tb);
+        float fres = mix(0.35, 0.9, puddle) * (0.4 + 0.6 * pow(1 - saturate(-d.y), 2.0));
+        col = mix(base, refl * 0.85 + float3(0.08, 0.05, 0.03), fres);
+        float2 g = xz * 1.2; float2 id = floor(g); float ph = fract(t * 0.7 + h21(id)); float r = length(fract(g) - 0.5);
+        col += float3(0.5, 0.6, 0.8) * smoothstep(0.03, 0.0, abs(r - ph * 0.5)) * (1 - ph) * 0.8 * (0.4 + puddle);
+        break;
+    }
+    case 4: {
+        float cb = cobble(xz, 3.6);
+        col = mix(float3(0.42, 0.37, 0.32), float3(0.78, 0.7, 0.6), cb * (0.7 + 0.3 * vnoise(xz * 3.0)));
+        float shade = smoothstep(2.2, 3.2, P.x + 0.5 * sin(P.z * 0.4));    // right building's shadow falls over our pavement
+        float dapple = smoothstep(0.45, 0.7, fbm(xz * 1.4 + float2(t * 0.15, 0)));
+        col *= mix(1.0, 0.55 + 0.35 * dapple, shade) * (0.9 + 0.1 * dapple);
+        break;
+    }
+    case 6: {
+        float3 base = float3(0.025, 0.025, 0.04) * (0.6 + 0.4 * cobble(xz, 2.2));
+        float tb;
+        float3 refl = streetBackdrop(float3(d.x, -d.y, d.z), t, th, atlas, tb);
+        float fres = 0.55 + 0.4 * pow(1 - saturate(-d.y), 2.0);
+        col = mix(base, refl * 1.1, fres);
+        float lane = smoothstep(0.06, 0.0, abs(P.x + 0.2)) * step(0.5, fract(P.z * 0.4));
+        col += float3(1.0, 0.2, 0.6) * lane * 0.6;
+        float g = smoothstep(0.1, 0.0, min(abs(fract(P.x * 0.5) - 0.5) - 0.46, abs(fract(P.z * 0.5) - 0.5) - 0.46)) * 0.0;
+        col += float3(0.3, 0.2, 0.5) * g;
+        col += float3(0.5, 0.7, 1.0) * smoothstep(0.03, 0.0, abs(length(fract(xz * 1.3) - 0.5) - fract(t * 0.6 + h21(floor(xz * 1.3))) * 0.5)) * 0.35;
+        break;
+    }
+    case 7: {
+        float cb = cobble(xz, 4.0);
+        col = mix(float3(0.14, 0.1, 0.08), float3(0.5, 0.38, 0.28), cb * (0.7 + 0.3 * vnoise(xz * 2.5)));
+        float lamp = 0.0;
+        for (int k = 0; k < 4; k++) { float lz = -5.0 - float(k) * 7.0; lamp += 0.7 / (1.0 + 0.5 * (pow(P.x - 4.6, 2.0) + pow(P.z - lz, 2.0))); lamp += 0.7 / (1.0 + 0.5 * (pow(P.x + 4.6, 2.0) + pow(P.z - lz, 2.0))); }
+        col += float3(1.0, 0.6, 0.25) * lamp * 0.35;
+        float steam = fbm(xz * 0.6 + float2(0, -t * 0.3));
+        col = mix(col, float3(0.95, 0.85, 0.75), smoothstep(0.62, 0.9, steam) * 0.35);
+        break;
+    }
+    default: {
+        float x = P.x;
+        float water = smoothstep(1.3, 1.1, abs(x + 0.0));
+        float3 paver = mix(float3(0.74, 0.76, 0.7), float3(0.9, 0.92, 0.86), cobble(xz, 2.4));
+        float grass = smoothstep(0.55, 0.62, fbm(xz * 0.5 + 2.0)) * step(2.4, abs(x));
+        paver = mix(paver, mix(float3(0.2, 0.55, 0.2), float3(0.4, 0.72, 0.25), vnoise(xz * 5.0)), grass);
+        float fl = step(0.93, h21(floor(xz * 4.0))) * smoothstep(0.22, 0.1, length(fract(xz * 4.0) - 0.5)) * grass;
+        paver = mix(paver, h21(floor(xz * 4.0) + 3.0) > 0.5 ? float3(1.0, 0.85, 0.2) : float3(1.0, 0.45, 0.65), fl);
+        float tb;
+        float2 rip = float2(sin(P.z * 3.0 + t * 1.5) * 0.02, cos(P.x * 4.0 + t) * 0.02);
+        float3 refl = streetBackdrop(normalize(float3(d.x + rip.x, -d.y, d.z + rip.y)), t, th, atlas, tb);
+        float3 wc = mix(float3(0.1, 0.45, 0.55), refl, 0.55 + 0.3 * pow(1 - saturate(-d.y), 2.0));
+        wc += float3(1) * smoothstep(0.92, 1.0, sin(P.z * 5.0 + t * 2.0 + P.x * 3.0)) * 0.15;
+        col = mix(paver, wc, water);
+        break;
+    }
+    }
+    return mix(fog, col, exp(-tg * fogK(th)));
+}
+
+// Ray against a vertical cylinder (axis through (cx, cz)); returns t or -1 when the hit height is outside [y0, y1].
+static float cylHit(float3 d, float cx, float cz, float r, float y0, float y1) {
+    float2 oc = float2(-cx, -cz); float2 dd = d.xz;
+    float A = dot(dd, dd); if (A < 1e-6) return -1;
+    float B = dot(oc, dd), C = dot(oc, oc) - r * r;
+    float disc = B * B - A * C; if (disc < 0) return -1;
+    float tt = (-B - sqrt(disc)) / A; if (tt <= 0) return -1;
+    float yh = d.y * tt; return (yh >= y0 && yh <= y1) ? tt : -1;
+}
+
+static float3 streetProps(float3 d, float t, int th, float3 col, thread float &tb) {
+    float3 fog = fogColor(th);
+    // our own table + a few more on the right pavement
+    float3 tabs[4] = { float3(0.0, 0, -0.95), float3(2.3, 0, -2.3), float3(3.6, 0, -4.4), float3(1.6, 0, -5.8) };
+    float topY = -0.5, seatY = -0.74;
+    for (int k = 0; k < 4; k++) {
+        float cx = tabs[k].x, cz = tabs[k].z;
+        // legs
+        float tl = cylHit(d, cx, cz, 0.035, GY, topY);
+        if (tl > 0 && tl < tb) { tb = tl; col = float3(0.1, 0.1, 0.11) + (th == 7 ? float3(0.25, 0.12, 0.05) : float3(0.0)); }
+        // table top
+        if (d.y < -1e-3) {
+            float tt = topY / d.y;
+            if (tt > 0 && tt < tb) {
+                float3 P = d * tt; float2 q = P.xz - float2(cx, cz); float r = length(q);
+                if (r < 0.42) {
+                    float3 tc;
+                    switch (th) {
+                    case 3: tc = float3(0.12, 0.1, 0.09) + float3(0.9, 0.55, 0.25) * 0.15 / (1.0 + 20.0 * r * r); break;
+                    case 4: tc = (step(0.5, fract(q.x * 7.0)) + step(0.5, fract(q.y * 7.0)) == 1.0) ? float3(0.9, 0.2, 0.2) : float3(1.0); break;
+                    case 6: tc = float3(0.05, 0.05, 0.08) + float3(0.1, 0.9, 1.0) * smoothstep(0.04, 0.0, abs(r - 0.38)) * 1.5; break;
+                    case 7: tc = float3(0.35, 0.18, 0.08) * (0.7 + 0.3 * cos(r * 30.0)) + float3(0.8, 0.5, 0.2) * smoothstep(0.03, 0.0, abs(r - 0.4)); break;
+                    default: tc = float3(0.88, 0.8, 0.65) * (0.85 + 0.15 * vnoise(q * 12.0)); break;
+                    }
+                    col = tc; tb = tt;
+                    // cup + saucer with steam
+                    float2 cq = q - float2(0.1, 0.05); float cr = length(cq);
+                    if (cr < 0.07) col = mix(float3(0.95), float3(0.2, 0.1, 0.05), smoothstep(0.045, 0.04, cr));
+                }
+            }
+            // chairs: two seats per table
+            for (int c = 0; c < 2; c++) {
+                float ang = float(c) * 3.14159 + (k == 0 ? 1.57 : 0.4);
+                float2 cc = float2(cx, cz) + float2(cos(ang), sin(ang)) * 0.62;
+                float ts = seatY / d.y;
+                if (ts > 0 && ts < tb) {
+                    float3 P = d * ts; float r = length(P.xz - cc);
+                    if (r < 0.2) { col = th == 3 ? float3(0.1, 0.07, 0.06) : (th == 6 ? float3(0.08, 0.06, 0.12) : (th == 7 ? float3(0.3, 0.14, 0.06) : float3(0.7, 0.3, 0.2))); tb = ts; }
+                }
+                float cl = cylHit(d, cc.x, cc.y, 0.025, GY, seatY);
+                if (cl > 0 && cl < tb) { tb = cl; col = float3(0.1); }
+            }
+        }
+    }
+    // steam over our cup
+    {
+        float3 sp = float3(0.1, -0.5, -0.9);
+        float rr = length(cross(d, sp - float3(0, 0.0, 0))) ;    // distance from the ray to the cup position
+        float rise = fbm(float2(rr * 20.0, t * 0.8)) ;
+        float3 ps = float3(0.1, -0.5 + 0.12 * fract(t * 0.5), -0.85);
+        float dist = length(cross(d, ps));
+        col += float3(0.9) * smoothstep(0.05, 0.0, dist) * rise * 0.5 * step(0.0, d.y + 0.8);
+    }
+    // lamp posts
+    for (int k = 0; k < 4; k++) {
+        float lz = -5.0 - float(k) * 7.0;
+        for (int s = 0; s < 2; s++) {
+            float lx = s == 0 ? -4.6 : 4.6;
+            float tl = cylHit(d, lx, lz, 0.035, GY, 3.3);
+            if (tl > 0 && tl < tb) { tb = tl; col = th == 7 ? float3(0.12, 0.09, 0.07) : float3(0.12, 0.13, 0.14); }
+            float3 head = float3(lx, 3.45, lz);
+            float dist = length(cross(d, head));
+            float gl = 1.0 / (1.0 + 30.0 * dist * dist);
+            float3 lc = th == 3 ? float3(1.0, 0.75, 0.4) : (th == 6 ? float3(0.3, 0.9, 1.0) : (th == 7 ? float3(1.0, 0.7, 0.3) : float3(1.0, 0.95, 0.8)));
+            float on = th == 4 || th == 8 ? 0.15 : (0.85 + 0.15 * sin(t * 7 + float(k) * 3.0 + float(s)));
+            col += lc * gl * on * (th == 7 ? 1.4 : 1.0) * smoothstep(0.0, 0.2, dot(normalize(head), d));
+        }
+    }
+    // pedestrians (billboards walking along the pavements)
+    for (int p = 0; p < 5; p++) {
+        float fp = float(p); float dir = (p % 2 == 0) ? 1.0 : -1.0;
+        float xp = (p % 2 == 0) ? 3.9 + fp * 0.1 : -3.9 - fp * 0.1;
+        float zp = -fract(t * 0.035 * (1.0 + fp * 0.25) * dir + fp * 0.31) * 38.0;
+        if (dir < 0) zp = -38.0 + fract(t * 0.035 * (1.0 + fp * 0.25) + fp * 0.31) * 38.0 - 2.0;
+        if (zp > -1.5 || d.z > -1e-3) continue;
+        float tt = zp / d.z;
+        if (tt <= 0 || tt >= tb) continue;
+        float3 P = d * tt;
+        float2 q = float2(P.x - xp, P.y - GY);
+        float body = step(abs(q.x), 0.2 * (1.0 - q.y * 0.08)) * step(0.0, q.y) * step(q.y, 1.5);
+        float head = smoothstep(0.13, 0.1, length(float2(q.x, q.y - 1.62)));
+        float legs = step(abs(q.x), 0.18) * step(q.y, 0.8) * step(0.5 * sin(t * 6.0 + fp) * 0.0, 1.0);
+        float m = max(body, head);
+        if (m > 0.5) {
+            float3 cc;
+            switch (th) {
+            case 3: cc = mix(float3(0.07, 0.07, 0.1), float3(0.55, 0.1, 0.12), step(0.6, h11(fp * 3.0))); break;
+            case 6: cc = float3(0.04, 0.04, 0.08) + float3(0.1, 0.9, 1.0) * smoothstep(0.03, 0.0, abs(q.x)) * 0.5 + float3(1.0, 0.2, 0.6) * step(1.55, q.y) * 0.3; break;
+            case 7: cc = mix(float3(0.22, 0.12, 0.07), float3(0.08), step(0.5, h11(fp * 5.0))); break;
+            case 4: cc = mix(float3(0.9, 0.35, 0.3), float3(0.3, 0.5, 0.8), step(0.5, h11(fp * 7.0))); break;
+            default: cc = mix(float3(0.95, 0.9, 0.7), float3(0.25, 0.6, 0.35), step(0.5, h11(fp * 7.0))); break;
+            }
+            if (q.y > 1.5) cc = float3(0.85, 0.65, 0.5) * 0.6;
+            col = mix(fog, cc, exp(-tt * fogK(th))); tb = tt;
+        }
+    }
+    // café awning above us (right side), scalloped edge, per-theme colours
+    if (d.y > 1e-3) {
+        float tt = 0.9 / d.y;
+        if (tt < tb) {
+            float3 P = d * tt;
+            if (P.x > 1.0 && P.x < XN && P.z < 0.6 && P.z > -3.0) {
+                float stripe = step(0.5, fract(P.x * 1.4));
+                float edge = P.x - 1.0;
+                float scallop = 0.18 * abs(sin(P.z * 5.0));
+                if (edge > scallop) {
+                    float3 ac;
+                    switch (th) {
+                    case 3: ac = mix(float3(0.35, 0.05, 0.08), float3(0.12, 0.03, 0.05), stripe); break;
+                    case 4: ac = mix(float3(0.92, 0.2, 0.18), float3(0.98), stripe); break;
+                    case 6: ac = mix(float3(0.06, 0.02, 0.12), float3(0.1, 0.9, 1.0), smoothstep(0.1, 0.0, abs(fract(P.x * 1.4) - 0.5) - 0.42)); break;
+                    case 7: ac = mix(float3(0.4, 0.12, 0.08), float3(0.8, 0.6, 0.25), stripe); break;
+                    default: ac = mix(float3(0.2, 0.55, 0.25), float3(0.4, 0.75, 0.3), vnoise(P.xz * 5.0)); break;
+                    }
+                    ac *= 0.5 + 0.5 * smoothstep(-3.0, 0.0, P.z);
+                    if (th == 3) ac += float3(0.5, 0.6, 0.8) * step(0.97, h21(floor(P.xz * 12.0))) * 0.4;   // drips
+                    col = mix(fog, ac, exp(-tt * fogK(th))); tb = tt;
+                }
+            }
+        }
+    }
+    // bunting (sunny / solar): flags strung across the street
+    if (th == 4 || th == 8) {
+        for (int k = 0; k < 3; k++) {
+            float zb = -4.0 - float(k) * 7.0;
+            if (d.z > -1e-3) continue;
+            float tt = zb / d.z; if (tt <= 0 || tt >= tb) continue;
+            float3 P = d * tt;
+            float sag = 3.4 + 0.5 * (1.0 - pow(P.x / XN, 2.0)) - 0.5;
+            float fy = P.y - sag;
+            float fl = step(abs(P.x), XN) * step(-0.4, fy) * step(fy, 0.0) * step(abs(fract(P.x * 2.0) - 0.5) , 0.5 - (-fy) * 1.2);
+            if (fl > 0.5) {
+                float3 cc = h21(floor(float2(P.x * 2.0, float(k)))) > 0.5 ? float3(1.0, 0.8, 0.2) : (h21(floor(float2(P.x * 2.0, float(k))) + 4.0) > 0.5 ? float3(0.9, 0.3, 0.4) : float3(0.3, 0.7, 0.9));
+                col = mix(fog, cc, exp(-tt * fogK(th))); tb = tt;
+            }
+        }
+    }
+    return col;
+}
+
+static float3 streetTheme(float3 d, float t, int th, texture2d<float> atlas) {
+    float tb;
+    float3 col = streetBackdrop(d, t, th, atlas, tb);
+    if (d.y < -1e-3) {
+        float tg = GY / d.y;
+        if (tg < tb) { col = groundStreet(d * tg, d, t, th, tg, atlas); tb = tg; }
+    }
+    col = streetProps(d, t, th, col, tb);
+    // atmosphere: rain streaks / dust motes
+    float a = atan2(d.x, -d.z), y = d.y;
+    if (th == 3 || th == 6) {
+        float rr = 0.0;
+        rr += rain(a, y, t, 70.0, 1.4, 0.12, 1.0) * 0.5 + rain(a, y, t, 120.0, 1.9, 0.12, 2.0) * 0.4 + rain(a, y, t, 200.0, 2.4, 0.12, 3.0) * 0.3;
+        col += (th == 3 ? float3(0.6, 0.7, 0.9) : float3(0.5, 0.7, 1.0)) * rr * (th == 3 ? 0.7 : 0.45);
+    } else if (th == 4 || th == 8) {
+        float2 pc = float2(a * 22.0, y * 22.0 - t * 0.3); float2 id = floor(pc);
+        col += float3(1.0, 0.95, 0.6) * step(0.94, h21(id)) * smoothstep(0.2, 0.0, length(fract(pc) - 0.5)) * 0.35;
+    } else if (th == 7) {
+        col += float3(1.0, 0.8, 0.5) * 0.06 * fbm(float2(a * 4.0, y * 4.0 - t * 0.1));
+    }
+    return col;
+}
+
+static float3 themeColor(float3 d, float t, int theme, texture2d<float> atlas) {
     float a = atan2(d.x, -d.z), y = d.y;
     switch (theme) {
     case 1: return lavaTheme(a, y, t);
     case 2: return viceTheme(a, y, t, d);
-    case 3: return rainTheme(a, y, t, d);
-    case 4: return sunnyTheme(a, y, t, d);
-    case 5: return matrixTheme(a, y, t);
-    case 6: return cyberTheme(a, y, t, d);
-    case 7: return steamTheme(a, y, t);
-    default: return solarTheme(a, y, t, d);
+    case 5: return matrixTheme(a, y, t, atlas);
+    default: return streetTheme(d, t, theme, atlas);
     }
 }
 
-fragment float4 themeFragment(VOut in [[stage_in]], constant ThemeParams &u [[buffer(0)]]) {
+fragment float4 themeFragment(VOut in [[stage_in]], constant ThemeParams &u [[buffer(0)]], texture2d<float> atlas [[texture(0)]]) {
     float2 n = float2(in.uv.x * 2 - 1, 1 - in.uv.y * 2);
     float3 ray = normalize(float3(n.x * u.tanY * u.aspect, n.y * u.tanY, -1));
     float3 d = normalize(u.right * ray.x + u.up * ray.y + u.back * ray.z);
-    return float4(themeColor(d, u.time, u.theme), 1);
+    return float4(themeColor(d, u.time, u.theme, atlas), 1);
 }

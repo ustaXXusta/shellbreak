@@ -31,6 +31,24 @@ final class CursorOverlay: @unchecked Sendable {
         return try? loader?.newTexture(data: data, options: [.SRGB: false])
     }()
 
+    /// Glyph atlas for the Matrix theme and neon/shop lettering: 8×8 cells (digits, A–Z, half-width katakana), white on black.
+    private(set) lazy var glyphAtlas: MTLTexture? = {
+        guard let loader else { return nil }
+        let glyphs = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌ")
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1; fmt.opaque = true
+        let img = UIGraphicsImageRenderer(size: CGSize(width: 512, height: 512), format: fmt).image { r in
+            UIColor.black.setFill(); r.fill(CGRect(x: 0, y: 0, width: 512, height: 512))
+            let font = UIFont.monospacedSystemFont(ofSize: 44, weight: .bold)
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
+            for (i, ch) in glyphs.enumerated() {
+                let str = String(ch) as NSString, sz = str.size(withAttributes: attrs)
+                str.draw(at: CGPoint(x: CGFloat(i % 8) * 64 + (64 - sz.width) / 2, y: CGFloat(i / 8) * 64 + (64 - sz.height) / 2), withAttributes: attrs)
+            }
+        }
+        guard let cg = img.cgImage else { return nil }
+        return try? loader.newTexture(cgImage: cg, options: [.SRGB: false])
+    }()
+
     /// Glass-style handle sprites ("bar", "corner", "rotate", "add", "close", "dark", "theme", "c0"…"c8"), each with a ".hot" variant.
     struct Handles {
         var tex: [String: MTLTexture]
@@ -48,6 +66,8 @@ final class CursorOverlay: @unchecked Sendable {
         let sq = CGSize(width: 160, height: 160)
         put("bar") { Self.glass(size: CGSize(width: 480, height: 72), symbol: nil, hot: $0, radiusFactor: 0.5, grabber: true) }
         put("corner") { Self.glass(size: sq, symbol: "arrow.up.left.and.arrow.down.right", hot: $0) }
+        put("corner2") { Self.glass(size: sq, symbol: "arrow.up.right.and.arrow.down.left", hot: $0) }
+        put("tilt") { Self.glass(size: sq, symbol: "angle", hot: $0) }
         put("rotate") { Self.glass(size: sq, symbol: "rotate.right", hot: $0) }
         put("add") { Self.glass(size: sq, symbol: "plus", hot: $0) }
         put("close") { Self.glass(size: sq, symbol: "xmark", hot: $0) }
@@ -58,7 +78,7 @@ final class CursorOverlay: @unchecked Sendable {
                                   UIColor(red: 0.0, green: 0.85, blue: 0.25, alpha: 1), UIColor(red: 0.1, green: 0.9, blue: 1, alpha: 1),
                                   UIColor(red: 0.78, green: 0.5, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1)]
         for (i, c) in colors.enumerated() { put("c\(i)") { Self.glassDot(size: sq, color: c, hot: $0) } }
-        return out.count >= 2 * (7 + colors.count) ? Handles(tex: out) : nil
+        return out.count >= 2 * (9 + colors.count) ? Handles(tex: out) : nil
     }()
 
     private static func glass(size: CGSize, symbol: String?, hot: Bool, radiusFactor: CGFloat = 0.34, grabber: Bool = false) -> UIImage {

@@ -226,8 +226,10 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
 
     // MARK: AR cursor
 
-    private enum Drag { case move, resize }
+    private enum Drag { case move, resize, tilt }
     private var drag: Drag?
+    private var dragCorner = 3
+    private var cursorGlyph: String?
     private var dragLocal = SIMD2<Float>(0, 0)       // handle point the hand stays pinned to while dragging
     private var hover: PanelRegion = .none
     private var handlesVisible = false
@@ -269,7 +271,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private func updateARCursor(camera: simd_float4x4, hasFrame: Bool) {
         let layout = settings.layoutActive
         if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0; drag = nil; dragIdx = nil }
-        handModel = nil; handUV = nil; handlesVisible = false; hover = .none; hoverIdx = nil
+        handModel = nil; handUV = nil; handlesVisible = false; hover = .none; hoverIdx = nil; cursorGlyph = nil
         guard layout, hasFrame, !panels.isEmpty else { pickerIdx = nil; _ = settings.takeInputs(); drag = nil; dragIdx = nil; return }
         let head = center(of: camera)
         let rot = rot3(camera)
@@ -286,7 +288,13 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                             panels[di].world = oriented(center: ctr, head: head, roll: panels[di].roll)
                         }
                     case .resize:
-                        panels[di].width = LayoutMath.clampedWidth(panels[di].width * (1 + Float(i.dx + i.dy) * 0.003))
+                        let sx: Float = (dragCorner == 1 || dragCorner == 3) ? 1 : -1, sy: Float = dragCorner >= 2 ? 1 : -1
+                        panels[di].width = LayoutMath.clampedWidth(panels[di].width * (1 + (sx * Float(i.dx) + sy * Float(i.dy)) * 0.003))
+                    case .tilt:
+                        if let w = panels[di].world {
+                            panels[di].roll += Float(i.dx) * 0.004
+                            panels[di].world = oriented(center: center(of: w), head: head, roll: panels[di].roll)
+                        }
                     }
                     changed[panels[di].id] = Date()
                 } else {
@@ -309,12 +317,13 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 switch region {
                 case .content(let u, let v): settings.onEnterScreen?(p.id, u, v)
                 case .moveBar: drag = .move; dragIdx = h.idx; dragLocal = PanelHandleGeometry.moveBar(width: p.width, aspect: p.aspect).center
-                case .resizeCorner: drag = .resize; dragIdx = h.idx; dragLocal = PanelHandleGeometry.resizeCorner(width: p.width, aspect: p.aspect).center
+                case .resizeCorner(let k):
+                    drag = .resize; dragIdx = h.idx; dragCorner = k
+                    dragLocal = PanelHandleGeometry.corners(width: p.width, aspect: p.aspect)[k].center
+                case .tilt: drag = .tilt; dragIdx = h.idx; dragLocal = PanelHandleGeometry.buttons(width: p.width, aspect: p.aspect)[1].center
                 case .rotate:
                     if p.kind == .mirror {
-                        panels[h.idx].roll = p.roll == 0 ? .pi / 2 : 0
-                        if let w = p.world { panels[h.idx].world = oriented(center: center(of: w), head: head, roll: panels[h.idx].roll) }
-                        changed[p.id] = Date(); hud.flash(panels[h.idx].roll == 0 ? "Yatay" : "Dikey")
+                        hud.flash("Ana ekran döndürülemez · dikey için + ile yeni ekran ekle")
                     } else {
                         settings.onRotate?(p.id, p.orientation == .landscape ? .portrait : .landscape)
                     }
@@ -340,7 +349,12 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         let d = dirNow()
         if let dr = drag, let di = dragIdx, panels.indices.contains(di), let w = panels[di].world {
             model = w; model.columns.3 = w * SIMD4(dragLocal.x, dragLocal.y, 0.01, 1)
-            handlesVisible = true; hoverIdx = di; hover = dr == .move ? .moveBar : .resizeCorner
+            handlesVisible = true; hoverIdx = di
+            switch dr {
+            case .move: hover = .moveBar
+            case .resize: hover = .resizeCorner(dragCorner); cursorGlyph = (dragCorner == 0 || dragCorner == 3) ? "corner" : "corner2"
+            case .tilt: hover = .tilt
+            }
             handHalfSize = 0.0225 * 1.4
         } else if let h = bestHit(head: head, dir: d), let w = panels[h.idx].world {
             let p = panels[h.idx]
@@ -348,6 +362,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             hover = region; hoverIdx = h.idx; handlesVisible = true
             if case .theme = region { pickerIdx = h.idx }      // opens on hover
             if case .content(let u, let v) = region { handUV = (u, v) }
+            if case .resizeCorner(let k) = region { cursorGlyph = (k == 0 || k == 3) ? "corner" : "corner2" }
             model = w; model.columns.3 = SIMD4(h.point + SIMD3(w.columns.2.x, w.columns.2.y, w.columns.2.z) * 0.012, 1)
             handHalfSize = 0.0225 * max(h.t, 0.8)
         } else {
@@ -355,7 +370,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             model = m; handHalfSize = 0.0225 * 2
         }
         if let pi = pickerIdx { handlesVisible = true; if hoverIdx == nil { hoverIdx = pi } }
-        var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, -handHalfSize, 0, 1)   // fingertip at the hit point
+        if cursorGlyph != nil { handHalfSize = 0.03 * max(1, handHalfSize / 0.045) }
+        var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, cursorGlyph == nil ? -handHalfSize : 0, 0, 1)   // fingertip at the hit point
         handModel = model * off
         handHalf = handHalfSize
     }
@@ -435,6 +451,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 enc.setRenderPipelineState(themePipeline)
                 enc.setVertexBytes(&sc, length: 8, index: 0)
                 enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0)
+                enc.setFragmentTexture(cursor.glyphAtlas, index: 0)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
             if cal.testPattern || tex.isEmpty {
@@ -471,13 +488,13 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     sprite(m, SIMD2(r.w / 2 * k, r.h / 2 * k), t)
                 }
                 draw(PanelHandleGeometry.moveBar(width: w, aspect: asp), "bar", hot: hover == .moveBar)
-                draw(PanelHandleGeometry.resizeCorner(width: w, aspect: asp), "corner", hot: hover == .resizeCorner)
                 let b = PanelHandleGeometry.buttons(width: w, aspect: asp)
                 draw(b[0], "rotate", hot: hover == .rotate)
-                draw(b[1], "add", hot: hover == .add)
-                draw(b[2], "close", hot: hover == .close || closeArm?.id == panels[hi].id)
-                draw(b[3], "dark", hot: hover == .darken || !settings.passthrough)
-                draw(b[4], "theme", hot: hover == .theme || pickerOpen)
+                draw(b[1], "tilt", hot: hover == .tilt)
+                draw(b[2], "add", hot: hover == .add)
+                draw(b[3], "close", hot: hover == .close || closeArm?.id == panels[hi].id)
+                draw(b[4], "dark", hot: hover == .darken || !settings.passthrough)
+                draw(b[5], "theme", hot: hover == .theme || pickerOpen)
                 if pickerIdx == hi {
                     let c = PanelHandleGeometry.themeCircles(width: w, aspect: asp)
                     for (i, r) in c.enumerated() {
@@ -486,7 +503,10 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     }
                 }
             }
-            if let hm = handModel, let ht = cursor.handTexture { sprite(hm, SIMD2(handHalf, handHalf), ht) }
+            if let hm = handModel {
+                if let g = cursorGlyph, let gt = cursor.handles?.get(g, hot: true) { sprite(hm, SIMD2(handHalf, handHalf), gt) }
+                else if let ht = cursor.handTexture { sprite(hm, SIMD2(handHalf, handHalf), ht) }
+            }
             if let (ht, hasp) = hud.current() {
                 var place = simd_float4x4(1); place.columns.3 = SIMD4(0, -0.17, -0.9, 1)
                 var hu = U(mvp: proj * shift * place, halfSize: SIMD2(0.07 * hasp, 0.07))
