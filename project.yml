@@ -22,6 +22,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.desktopar.host
+        PRODUCT_NAME: Shellbreak
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_OBJC_BRIDGING_HEADER: MacHost/Sources/Displays/PrivateAPI/MacHost-Bridging-Header.h
         ENABLE_HARDENED_RUNTIME: NO
@@ -30,7 +31,8 @@ targets:
     info:
       path: MacHost/Resources/Info.plist
       properties:
-        CFBundleName: DesktopAR Host
+        CFBundleName: Shellbreak
+        CFBundleDisplayName: Shellbreak
         LSUIElement: true
         NSLocalNetworkUsageDescription: DesktopAR streams your desktops to the iPhone on the local network.
         NSBonjourServices: [_desktopar._tcp]
@@ -50,13 +52,15 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.desktopar.phone
+        PRODUCT_NAME: Shellbreak
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
     info:
       path: PhoneClient/Resources/Info.plist
       properties:
-        CFBundleName: DesktopAR
+        CFBundleName: Shellbreak
+        CFBundleDisplayName: Shellbreak
         NSCameraUsageDescription: The camera shows the room behind your virtual desktops.
         NSLocalNetworkUsageDescription: DesktopAR connects to your Mac on the local network.
         NSBonjourServices: [_desktopar._tcp]
