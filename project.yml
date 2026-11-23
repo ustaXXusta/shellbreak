@@ -1,0 +1,66 @@
+name: DesktopAR
+options:
+  bundleIdPrefix: dev.desktopar
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Automatic
+packages:
+  DesktopARShared:
+    path: Shared
+targets:
+  MacHost:
+    type: application
+    platform: macOS
+    sources: [MacHost/Sources]
+    dependencies:
+      - package: DesktopARShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.desktopar.host
+        SWIFT_OBJC_BRIDGING_HEADER: MacHost/Sources/Displays/PrivateAPI/MacHost-Bridging-Header.h
+        ENABLE_HARDENED_RUNTIME: NO
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: MacHost/Resources/MacHost.entitlements
+    info:
+      path: MacHost/Resources/Info.plist
+      properties:
+        CFBundleName: DesktopAR Host
+        LSUIElement: true
+        NSLocalNetworkUsageDescription: DesktopAR streams your desktops to the iPhone on the local network.
+        NSBonjourServices: [_desktopar._tcp]
+        NSScreenCaptureUsageDescription: DesktopAR captures your desktops to stream them to the headset.
+    entitlements:
+      path: MacHost/Resources/MacHost.entitlements
+      properties:
+        com.apple.security.app-sandbox: false
+        com.apple.security.network.server: true
+        com.apple.security.network.client: true
+  PhoneClient:
+    type: application
+    platform: iOS
+    sources: [PhoneClient/Sources]
+    dependencies:
+      - package: DesktopARShared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.desktopar.phone
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+    info:
+      path: PhoneClient/Resources/Info.plist
+      properties:
+        CFBundleName: DesktopAR
+        NSCameraUsageDescription: The camera shows the room behind your virtual desktops.
+        NSLocalNetworkUsageDescription: DesktopAR connects to your Mac on the local network.
+        NSBonjourServices: [_desktopar._tcp]
+        UIRequiredDeviceCapabilities: [arkit, metal]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeRight]
+        UIStatusBarHidden: true
+        UIRequiresFullScreen: true
+        UIFileSharingEnabled: true
+        UILaunchScreen: {}
