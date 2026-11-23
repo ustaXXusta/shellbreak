@@ -23,6 +23,7 @@ struct MacHostApp: App {
                 }
                 Toggle("Debug: ~/Desktop/stream.h265", isOn: $host.dumpToDesktop)
                 Divider()
+                slider("Panel genişliği (m)", $host.panelWidthM, 0.5...4, "%.2f")
                 Text("Gözlük kalibrasyonu").font(.headline)
                 Toggle("Gerçek dünya (passthrough)", isOn: $host.passthrough)
                 Toggle("Test deseni (ızgara + artı)", isOn: $host.calibration.testPattern)

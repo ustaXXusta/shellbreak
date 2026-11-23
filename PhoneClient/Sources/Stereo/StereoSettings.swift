@@ -8,6 +8,7 @@ final class StereoSettings: @unchecked Sendable {
     private var _stereo = true
     private var _recenter = true
     private var _passthrough = true
+    private var _panelWidth: Float = 2.0
 
     var calibration: Calibration {
         get { lock.lock(); defer { lock.unlock() }; return _calibration }
@@ -16,6 +17,10 @@ final class StereoSettings: @unchecked Sendable {
     var stereo: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _stereo }
         set { lock.lock(); _stereo = newValue; _recenter = true; lock.unlock() }
+    }
+    var panelWidthM: Float {
+        get { lock.lock(); defer { lock.unlock() }; return _panelWidth }
+        set { lock.lock(); _panelWidth = max(0.3, min(4, newValue)); lock.unlock() }
     }
     var passthrough: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _passthrough }

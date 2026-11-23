@@ -34,6 +34,7 @@ final class StreamModel: ObservableObject {
         connection.onMessage = { [weak self] msg in
             switch msg {
             case .calibration(let c): self?.settings.calibration = c
+            case .scene(let sc): if let p = sc.panels.first { self?.settings.panelWidthM = Float(p.widthM) }
             case .mode(let m): self?.settings.passthrough = m.passthrough
             case .cursor(let c): self?.cursor.update(c)
             case .cursorImage(let i): self?.cursor.update(i)

@@ -22,7 +22,6 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var eyeTextures: [MTLTexture] = []
     private var eyeSize = (width: 0, height: 0)
 
-    private let panelWidthM: Float = 1.3
     private let panelDistanceM: Float = 1.4
     private let screenMm = LensMath.iPhone13ProScreenMm
 
@@ -107,6 +106,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         guard ds.width > 0, let drawable = view.currentDrawable, let cb = queue.makeCommandBuffer() else { return }
         ensureEyeTextures(cal, drawable: ds)
         guard eyeTextures.count == 2 else { return }
+        let panelWidthM = settings.panelWidthM
         let frame = ar.latestFrame
         let camT = frame?.camera.transform ?? matrix_identity_float4x4
         if frame != nil, settings.takeRecenter() || panelWorld == nil {

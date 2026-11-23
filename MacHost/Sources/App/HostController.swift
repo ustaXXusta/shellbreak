@@ -13,6 +13,15 @@ final class HostController: ObservableObject {
     @Published var codecName = "-"
     @Published var dumpToDesktop = false { didSet { updateDump() } }
     @Published var lastError: String?
+    @Published var panelWidthM: Double = {
+        let v = UserDefaults.standard.double(forKey: "panelWidthM"); return v > 0 ? v : 2.0
+    }() { didSet { UserDefaults.standard.set(panelWidthM, forKey: "panelWidthM"); sendScene() } }
+    private var sceneRevision = 0
+    func sendScene() {
+        sceneRevision += 1
+        server.send(.scene(SceneMessage(revision: sceneRevision, panels: [
+            PanelInfo(id: "desktop-1", kind: .mirror, streamId: 0, desktopIndex: 1, widthM: panelWidthM, aspect: 1.6)])))
+    }
     @Published var passthrough = true { didSet { server.send(.mode(ModeMessage(passthrough: passthrough))) } }
     @Published var calibration: Calibration = HostController.loadCalibration() {
         didSet { saveCalibration(); server.send(.calibration(calibration)) }
@@ -58,6 +67,7 @@ final class HostController: ObservableObject {
                 if case .hello = msg { Task { @MainActor in
                     guard let self else { return }
                     self.server.send(.calibration(self.calibration))
+                    self.sendScene()
                     self.server.send(.mode(ModeMessage(passthrough: self.passthrough)))
                     self.cursorStreamer?.resend()
                 } }
