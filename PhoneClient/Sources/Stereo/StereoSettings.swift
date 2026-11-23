@@ -35,6 +35,7 @@ final class StereoSettings: @unchecked Sendable {
     }
     func enqueue(_ i: ARInput) { lock.lock(); _inputs.append(i); if _inputs.count > 400 { _inputs.removeFirst() }; lock.unlock() }
     func takeInputs() -> [ARInput] { lock.lock(); defer { lock.unlock() }; let i = _inputs; _inputs = []; return i }
+    var onAddDisplay: (() -> Void)?
     var onEnterScreen: ((_ u: Double, _ v: Double) -> Void)?
     func enqueue(_ c: LayoutCommand) { lock.lock(); _commands.append(c); if _commands.count > 200 { _commands.removeFirst() }; lock.unlock() }
     func takeCommands() -> [LayoutCommand] { lock.lock(); defer { lock.unlock() }; let c = _commands; _commands = []; return c }

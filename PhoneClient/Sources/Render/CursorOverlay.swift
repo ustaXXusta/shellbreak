@@ -31,6 +31,31 @@ final class CursorOverlay: @unchecked Sendable {
         return try? loader?.newTexture(data: data, options: [.SRGB: false])
     }()
 
+    struct Handles { var bar, corner, rotate, add, close: MTLTexture }
+    /// Flat handle sprites drawn around a hovered panel in layout mode.
+    private(set) lazy var handles: Handles? = {
+        func glyph(_ text: String, size: CGSize, bg: UIColor) -> MTLTexture? {
+            let img = UIGraphicsImageRenderer(size: size).image { _ in
+                bg.setFill()
+                UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: min(size.width, size.height) / 2.5).fill()
+                guard !text.isEmpty else { return }
+                let font = UIFont.systemFont(ofSize: size.height * 0.7, weight: .bold)
+                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
+                let t = text as NSString, ts = t.size(withAttributes: attrs)
+                t.draw(at: CGPoint(x: (size.width - ts.width) / 2, y: (size.height - ts.height) / 2), withAttributes: attrs)
+            }
+            guard let d = img.pngData() else { return nil }
+            return try? loader?.newTexture(data: d, options: [.SRGB: false])
+        }
+        let sq = CGSize(width: 96, height: 96)
+        guard let bar = glyph("", size: CGSize(width: 320, height: 48), bg: UIColor(white: 0.9, alpha: 0.85)),
+              let corner = glyph("⤡", size: sq, bg: UIColor(red: 0.2, green: 0.5, blue: 1, alpha: 0.9)),
+              let rot = glyph("↻", size: sq, bg: UIColor(white: 0.25, alpha: 0.9)),
+              let add = glyph("+", size: sq, bg: UIColor(red: 0.15, green: 0.6, blue: 0.3, alpha: 0.9)),
+              let close = glyph("×", size: sq, bg: UIColor(red: 0.75, green: 0.2, blue: 0.2, alpha: 0.9)) else { return nil }
+        return Handles(bar: bar, corner: corner, rotate: rot, add: add, close: close)
+    }()
+
     var snapshot: Snapshot { lock.lock(); defer { lock.unlock() }; return snap }
 
     func update(_ c: CursorState) {

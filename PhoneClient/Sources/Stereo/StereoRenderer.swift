@@ -144,49 +144,104 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         }
     }
 
-    /// Layout-mode mouse: steer a head-relative ray, hit-test it against the panel, click → enter screen mode there.
+    private enum Drag { case move, resize }
+    private var drag: Drag?
+    private var dragLocal = SIMD2<Float>(0, 0)       // handle point the hand stays pinned to while dragging
+    private var hover: PanelRegion = .none
+    private var handlesVisible = false
+
+    /// Layout-mode mouse: steer a head-relative ray, hit-test it against the panel and its handles,
+    /// drag the move bar / resize corner, click content → enter screen mode there.
     private func updateARCursor(camera: simd_float4x4, hasFrame: Bool, aspect: Float) {
         let layout = settings.layoutActive
-        if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0 }
-        handModel = nil; handUV = nil
-        guard layout, hasFrame, let panel = panelWorld else { _ = settings.takeInputs(); return }
-        var clicked = false
-        for i in settings.takeInputs() {
+        if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0; drag = nil }
+        handModel = nil; handUV = nil; handlesVisible = false; hover = .none
+        guard layout, hasFrame, var panel = panelWorld else { _ = settings.takeInputs(); drag = nil; return }
+        let head = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
+        let width = settings.panelWidthM
+        let inputs = settings.takeInputs()
+        // Resolve what is under the ray first (using the ray before this frame's movement while dragging).
+        func rayHit() -> (point: SIMD3<Float>, local: SIMD2<Float>, t: Float, d: SIMD3<Float>)? {
+            let rot = simd_float3x3(SIMD3(camera.columns.0.x, camera.columns.0.y, camera.columns.0.z),
+                                    SIMD3(camera.columns.1.x, camera.columns.1.y, camera.columns.1.z),
+                                    SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
+            let d = simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch))
+            let n = SIMD3(panel.columns.2.x, panel.columns.2.y, panel.columns.2.z)
+            let c = SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z)
+            let denom = simd_dot(d, n)
+            guard abs(denom) > 1e-4 else { return nil }
+            let t = simd_dot(c - head, n) / denom
+            guard t > 0.1 else { return nil }
+            let p = head + d * t
+            let l = panel.inverse * SIMD4(p, 1)
+            return (p, SIMD2(l.x, l.y), t, d)
+        }
+        for i in inputs {
             switch i.kind {
             case "move":
-                arYaw = max(-0.6, min(0.6, arYaw - Float(i.dx) * 0.0022))
-                arPitch = max(-0.45, min(0.45, arPitch - Float(i.dy) * 0.0022))
-            case "down": clicked = true
+                if let dr = drag {
+                    var center = SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z)
+                    switch dr {
+                    case .move:
+                        center = LayoutMath.moved(center: center, head: head, dYaw: -Float(i.dx) * 0.0022, dPitch: -Float(i.dy) * 0.0022, dRadius: 0)
+                        panel = LayoutMath.facing(center: center, head: head)
+                        panelWorld = panel
+                    case .resize:
+                        settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM * (1 + Float(i.dx + i.dy) * 0.003))
+                    }
+                    changedAt = Date()
+                } else {
+                    arYaw = max(-0.6, min(0.6, arYaw - Float(i.dx) * 0.0022))
+                    arPitch = max(-0.45, min(0.45, arPitch - Float(i.dy) * 0.0022))
+                }
+            case "down":
+                if drag == nil, let h = rayHit() {
+                    switch PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: settings.panelWidthM, aspect: aspect) {
+                    case .content(let u, let v): settings.onEnterScreen?(u, v)
+                    case .moveBar: drag = .move; dragLocal = PanelHandleGeometry.moveBar(width: settings.panelWidthM, aspect: aspect).center
+                    case .resizeCorner: drag = .resize; dragLocal = PanelHandleGeometry.resizeCorner(width: settings.panelWidthM, aspect: aspect).center
+                    case .rotate: hud.flash("Döndürme F5'te geliyor")
+                    case .add: settings.onAddDisplay?(); hud.flash("Yeni ekran isteği gönderildi")
+                    case .close: hud.flash("Kapatma F5'te geliyor")
+                    case .none: break
+                    }
+                }
+            case "up": drag = nil
             default: break
             }
         }
-        let rot = simd_float3x3(SIMD3(camera.columns.0.x, camera.columns.0.y, camera.columns.0.z),
-                                SIMD3(camera.columns.1.x, camera.columns.1.y, camera.columns.1.z),
-                                SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
-        let o = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
-        let d = simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch))
-        let n = SIMD3(panel.columns.2.x, panel.columns.2.y, panel.columns.2.z)
-        let c = SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z)
-        var point = o + d * 2, basis = camera, scale: Float = 2
-        let denom = simd_dot(d, n)
-        if abs(denom) > 1e-4 {
-            let t = simd_dot(c - o, n) / denom
-            if t > 0.1 {
-                let p = o + d * t
-                let local = panel.inverse * SIMD4(p, 1)
-                let w = settings.panelWidthM, h = w / aspect
-                let u = Double(local.x / w + 0.5), v = Double(0.5 - local.y / h)
-                if u >= 0, u <= 1, v >= 0, v <= 1 {
-                    handUV = (u, v); point = p + n * 0.01; basis = panel; scale = t
-                } else { scale = t }
+        let w = settings.panelWidthM
+        var handHalfSize: Float = 0.045
+        var model: simd_float4x4
+        if let dr = drag {
+            // Pinned to the grabbed handle while the panel moves under the mouse.
+            _ = dr
+            let p = panel * SIMD4(dragLocal.x, dragLocal.y, 0.01, 1)
+            model = panel; model.columns.3 = p
+            handlesVisible = true; hover = dr == .move ? .moveBar : .resizeCorner
+            handHalfSize = 0.0225 * 1.4
+        } else if let h = rayHit() {
+            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: w, aspect: aspect)
+            let area = PanelHandleGeometry.hoverArea(width: w, aspect: aspect)
+            if area.contains(h.local.x, h.local.y) {
+                hover = region; handlesVisible = true
+                if case .content(let u, let v) = region { handUV = (u, v) }
+                model = panel; model.columns.3 = SIMD4(h.point + SIMD3(panel.columns.2.x, panel.columns.2.y, panel.columns.2.z) * 0.012, 1)
+                handHalfSize = 0.0225 * max(h.t, 0.8)
+            } else {
+                model = camera; model.columns.3 = SIMD4(h.point, 1); handHalfSize = 0.0225 * max(h.t, 0.8)
             }
+        } else {
+            var m = camera
+            let rot = simd_float3x3(SIMD3(camera.columns.0.x, camera.columns.0.y, camera.columns.0.z),
+                                    SIMD3(camera.columns.1.x, camera.columns.1.y, camera.columns.1.z),
+                                    SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
+            m.columns.3 = SIMD4(head + simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch)) * 2, 1)
+            model = m; handHalfSize = 0.0225 * 2
         }
-        let half: Float = 0.045 * max(scale, 0.8)
-        var m = basis; m.columns.3 = SIMD4(point, 1)
-        var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, -half, 0, 1)   // fingertip at the hit point
-        handModel = m * off
-        handHalf = half
-        if clicked, let (u, v) = handUV { settings.onEnterScreen?(u, v) }
+        var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, -handHalfSize, 0, 1)   // fingertip at the hit point
+        handModel = model * off
+        handHalf = handHalfSize
     }
     private var handHalf: Float = 0.05
 
@@ -262,6 +317,27 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     enc.setFragmentTexture(ct, index: 0)
                     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
+            }
+            if handlesVisible, let video, let handles = cursor.handles {
+                let w = panelWidthM, asp = video.1
+                var shift = simd_float4x4(1)
+                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
+                struct HC { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
+                func draw(_ r: LocalRect, _ tex: MTLTexture, hot: Bool) {
+                    var m = panelModel; m.columns.3 = panelModel * SIMD4(r.cx, r.cy, 0.006, 1)
+                    let k: Float = hot ? 1.15 : 1
+                    var hc = HC(mvp: proj * shift * v4 * m, halfSize: SIMD2(r.w / 2 * k, r.h / 2 * k))
+                    enc.setRenderPipelineState(spritePipeline)
+                    enc.setVertexBytes(&hc, length: MemoryLayout<HC>.size, index: 0)
+                    enc.setFragmentTexture(tex, index: 0)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                }
+                draw(PanelHandleGeometry.moveBar(width: w, aspect: asp), handles.bar, hot: hover == .moveBar)
+                draw(PanelHandleGeometry.resizeCorner(width: w, aspect: asp), handles.corner, hot: hover == .resizeCorner)
+                let b = PanelHandleGeometry.buttons(width: w, aspect: asp)
+                draw(b[0], handles.rotate, hot: hover == .rotate)
+                draw(b[1], handles.add, hot: hover == .add)
+                draw(b[2], handles.close, hot: hover == .close)
             }
             if let hm = handModel, let ht = cursor.handTexture {
                 var shift = simd_float4x4(1)

@@ -56,6 +56,7 @@ final class StreamModel: ObservableObject {
         settings.onPanelChanged = { [weak self] t, w in
             self?.connection.send(.panelUpdate(PanelUpdate(panelId: "desktop-1", transform: t, widthM: Double(w), curvature: 0)))
         }
+        settings.onAddDisplay = { [weak self] in self?.connection.send(.addDisplay(AddDisplay(afterPanelId: "desktop-1"))) }
         settings.onEnterScreen = { [weak self] u, v in
             self?.connection.send(.enterScreen(EnterScreen(panelId: "desktop-1", u: u, v: v)))
         }
