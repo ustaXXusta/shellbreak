@@ -17,7 +17,7 @@ final class ControlMessageTests: XCTestCase {
             .inputMode(InputMode(mode: "layout")), .arInput(ARInput(kind: "move", dx: 3.5, dy: -1)),
             .layoutCommand(LayoutCommand(command: "toggle_orientation")),
             .enterScreen(EnterScreen(panelId: "desktop-2", u: 0.4, v: 0.7)),
-            .magnet(MagnetJoin(panelA: "desktop-1", cornerA: 1, panelB: "desktop-2", cornerB: 0)),
+            .magnet(MagnetJoin(panelA: "desktop-1", edgeA: 1, panelB: "desktop-2", edgeB: 0)),
             .cursor(CursorState(panelId: "desktop-1", u: 0.51, v: 0.33, visible: true, imageId: 7)),
             .cursorImage(CursorImage(imageId: 7, pngBase64: "AAAA", hotspotX: 4, hotspotY: 4, widthPt: 32, heightPt: 32)),
             .gazeFocus(GazeFocus(panelId: "desktop-2")), .calibration(Calibration()),

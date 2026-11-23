@@ -84,11 +84,12 @@ public struct EnterScreen: Codable, Equatable {
     public var panelId: String; public var u: Double; public var v: Double
     public init(panelId: String, u: Double, v: Double) { self.panelId = panelId; self.u = u; self.v = v }
 }
-/// Two panels were joined with magnets: panel B sits against panel A (corners: 0 TL, 1 TR, 2 BL, 3 BR in panel space).
+/// Two panels were joined with magnets: panel B sits against edge `edgeA` of panel A, on B's opposite edge
+/// (edges: 0 left, 1 right, 2 top, 3 bottom).
 public struct MagnetJoin: Codable, Equatable {
-    public var panelA: String; public var cornerA: Int; public var panelB: String; public var cornerB: Int
-    public init(panelA: String, cornerA: Int, panelB: String, cornerB: Int) {
-        self.panelA = panelA; self.cornerA = cornerA; self.panelB = panelB; self.cornerB = cornerB
+    public var panelA: String; public var edgeA: Int; public var panelB: String; public var edgeB: Int
+    public init(panelA: String, edgeA: Int, panelB: String, edgeB: Int) {
+        self.panelA = panelA; self.edgeA = edgeA; self.panelB = panelB; self.edgeB = edgeB
     }
 }
 public struct CursorState: Codable, Equatable {
@@ -114,17 +115,19 @@ public struct Calibration: Codable, Equatable {
     public var k1: Double, k2: Double, fovDegrees: Double, chromaticAberration: Double, sharpen: Double, supersample: Double
     /// Show the grid + centre-cross test pattern instead of the video (optional on the wire, default false).
     public var testPattern: Bool
+    /// How strongly magnet-joined screens bend toward the viewer, 0 (flat) … 1 (fully facing). Optional on the wire.
+    public var joinBend: Double
     public init(lensSeparationMm: Double = 63, screenToLensMm: Double = 39, verticalOffsetMm: Double = 0,
                 k1: Double = 0.34, k2: Double = 0.55, fovDegrees: Double = 90,
                 chromaticAberration: Double = 0.008, sharpen: Double = 0.3, supersample: Double = 1.25,
-                testPattern: Bool = false) {
+                testPattern: Bool = false, joinBend: Double = 0.7) {
         self.lensSeparationMm = lensSeparationMm; self.screenToLensMm = screenToLensMm
         self.verticalOffsetMm = verticalOffsetMm; self.k1 = k1; self.k2 = k2; self.fovDegrees = fovDegrees
         self.chromaticAberration = chromaticAberration; self.sharpen = sharpen; self.supersample = supersample
-        self.testPattern = testPattern
+        self.testPattern = testPattern; self.joinBend = joinBend
     }
     private enum CodingKeys: String, CodingKey {
-        case lensSeparationMm, screenToLensMm, verticalOffsetMm, k1, k2, fovDegrees, chromaticAberration, sharpen, supersample, testPattern
+        case lensSeparationMm, screenToLensMm, verticalOffsetMm, k1, k2, fovDegrees, chromaticAberration, sharpen, supersample, testPattern, joinBend
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -136,6 +139,7 @@ public struct Calibration: Codable, Equatable {
         chromaticAberration = try c.decode(Double.self, forKey: .chromaticAberration)
         sharpen = try c.decode(Double.self, forKey: .sharpen); supersample = try c.decode(Double.self, forKey: .supersample)
         testPattern = try c.decodeIfPresent(Bool.self, forKey: .testPattern) ?? false
+        joinBend = try c.decodeIfPresent(Double.self, forKey: .joinBend) ?? 0.7
     }
 }
 public struct ModeMessage: Codable, Equatable { public var passthrough: Bool; public init(passthrough: Bool) { self.passthrough = passthrough } }

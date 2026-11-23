@@ -240,14 +240,14 @@ final class HostController: ObservableObject {
 
     private func applyMagnet(_ m: MagnetJoin) {
         refreshDisplays()
-        guard let pa = panels.first(where: { $0.id == m.panelA }), let pb = panels.first(where: { $0.id == m.panelB }),
-              let da = displays.first(where: { $0.id == pa.displayID }), let db = displays.first(where: { $0.id == pb.displayID }),
-              let nb = MagnetMath.normalizedCornerB(cornerA: m.cornerA, cornerB: m.cornerB) else { hud("Farklı köşeler seç"); return }
+        guard MagnetMath.isValid(m.edgeA),
+              let pa = panels.first(where: { $0.id == m.panelA }), let pb = panels.first(where: { $0.id == m.panelB }),
+              let da = displays.first(where: { $0.id == pa.displayID }), let db = displays.first(where: { $0.id == pb.displayID }) else { return }
         // The main display cannot move, so when B is main, A is the one that moves against it.
         let moveB = !db.isMain
         let base = moveB ? da : db, mover = moveB ? db : da
-        guard let origin = MagnetMath.displayOrigin(a: base.bounds, bSize: mover.bounds.size,
-                                                    cornerA: moveB ? m.cornerA : nb, cornerB: moveB ? nb : m.cornerA) else { return }
+        let edge = moveB ? m.edgeA : MagnetMath.opposite(m.edgeA)
+        guard let origin = MagnetMath.displayOrigin(a: base.bounds, bSize: mover.bounds.size, edgeA: edge) else { return }
         var origins: [CGDirectDisplayID: CGPoint] = [mover.id: origin]
         let rect = CGRect(origin: origin, size: mover.bounds.size)
         var next = max(displays.map { $0.bounds.maxX }.max() ?? 0, rect.maxX)

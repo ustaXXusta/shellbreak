@@ -41,6 +41,7 @@ atlasTex.replace(region: MTLRegionMake2D(0, 0, 512, 512), mipmapLevel: 0, withBy
 let W = 640, H = 360
 var sheet = [UInt8](repeating: 0, count: W * 4 * H * 2 * 4)
 struct TP { var right: SIMD4<Float>; var up: SIMD4<Float>; var back: SIMD4<Float>; var tanY: Float; var aspect: Float; var time: Float; var theme: Int32 }
+let tSec: Float = CommandLine.arguments.count > 4 ? Float(CommandLine.arguments[4]) ?? 3 : 3
 let yaw = Float(yawDeg * .pi / 180), pitch = Float(pitchDeg * .pi / 180)
 // camera axes for yaw (turn left positive) then pitch
 let fwd = SIMD3<Float>(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
@@ -54,12 +55,17 @@ for theme in 1...8 {
     let tex = dev.makeTexture(descriptor: td)!
     let rp = MTLRenderPassDescriptor(); rp.colorAttachments[0].texture = tex; rp.colorAttachments[0].loadAction = .clear; rp.colorAttachments[0].storeAction = .store
     let cb = q.makeCommandBuffer()!; let enc = cb.makeRenderCommandEncoder(descriptor: rp)!
-    var tp = TP(right: SIMD4(norm(right0), 0), up: SIMD4(norm(up0), 0), back: SIMD4(back, 0), tanY: Float(tan(90.0 * .pi / 360)), aspect: Float(W) / Float(H), time: 3.0, theme: Int32(theme))
+    var tp = TP(right: SIMD4(norm(right0), 0), up: SIMD4(norm(up0), 0), back: SIMD4(back, 0), tanY: Float(tan(90.0 * .pi / 360)), aspect: Float(W) / Float(H), time: tSec, theme: Int32(theme))
     var sc = SIMD2<Float>(1, 1)
     enc.setRenderPipelineState(pso); enc.setVertexBytes(&sc, length: 8, index: 0); enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0); enc.setFragmentTexture(atlasTex, index: 0)
     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
     var px = [UInt8](repeating: 0, count: W * H * 4)
     tex.getBytes(&px, bytesPerRow: W * 4, from: MTLRegionMake2D(0, 0, W, H), mipmapLevel: 0)
+    // STATS: a theme that renders flat black/one colour is broken.
+    var sum = 0.0, sum2 = 0.0
+    for i in stride(from: 0, to: W * H * 4, by: 4) { let l = (Double(px[i]) + Double(px[i + 1]) + Double(px[i + 2])) / 765.0; sum += l; sum2 += l * l }
+    let mean = sum / Double(W * H), sd = (sum2 / Double(W * H) - mean * mean).squareRoot()
+    print(String(format: "theme %d mean %.3f stddev %.3f %@", theme, mean, sd, sd < 0.02 ? "FLAT?!" : "ok"))
     let ox = ((theme - 1) % 4) * W, oy = ((theme - 1) / 4) * H
     for row in 0..<H { for col in 0..<(W * 4) { sheet[(oy + row) * (W * 4 * 4) + ox * 4 + col] = px[row * W * 4 + col] } }
 }

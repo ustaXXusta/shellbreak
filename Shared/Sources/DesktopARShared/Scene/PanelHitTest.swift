@@ -32,10 +32,11 @@ public enum PanelHandleGeometry {
         let hw = width / 2, hh = heightM(width: width, aspect: aspect) / 2
         return [(-hw, hh), (hw, hh), (-hw, -hh), (hw, -hh)].map { LocalRect(cx: $0.0, cy: $0.1, w: 0.1, h: 0.1) }
     }
-    /// Magnet buttons just outside the four corners: TL, TR, BL, BR.
+    /// Magnet buttons outside the four edge midpoints: left, right, top, bottom (the top one sits above the toolbar,
+    /// the bottom one below the move bar).
     public static func magnets(width: Float, aspect: Float) -> [LocalRect] {
-        let hw = width / 2 + 0.085, hh = heightM(width: width, aspect: aspect) / 2 + 0.085
-        return [(-hw, hh), (hw, hh), (-hw, -hh), (hw, -hh)].map { LocalRect(cx: $0.0, cy: $0.1, w: 0.065, h: 0.065) }
+        let hw = width / 2, hh = heightM(width: width, aspect: aspect) / 2
+        return [(-(hw + 0.09), Float(0)), (hw + 0.09, 0), (0, hh + 0.2), (0, -(hh + 0.15))].map { LocalRect(cx: $0.0, cy: $0.1, w: 0.07, h: 0.07) }
     }
     /// Rotate, Tilt, Add, Close, Darken world, Theme — left to right above the panel.
     public static let buttonCount = 6
@@ -61,7 +62,7 @@ public enum PanelHandleGeometry {
         let h = heightM(width: width, aspect: aspect)
         var minX = -(width + 0.3) / 2, maxX = (width + 0.3) / 2
         let minY = -(h + 0.3) / 2 - 0.1
-        var maxY = h / 2 + 0.3
+        var maxY = h / 2 + 0.36
         for c in themeCircles(width: width, aspect: aspect) { minX = min(minX, c.cx - c.w / 2 - 0.05); maxX = max(maxX, c.cx + c.w / 2 + 0.05); maxY = max(maxY, c.cy + c.h / 2 + 0.05) }
         return LocalRect(cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY)
     }

@@ -95,29 +95,34 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var closeArm: (id: String, at: Date)?
     private var texRefs: [CVMetalTexture] = []
 
-    // Magnets: joined panels keep sharing an edge while either one is moved, resized or tilted.
-    struct Joint { var a: String; var b: String; var cA: Int; var cB: Int }
+    // Magnets: joined panels keep sharing an edge (bent toward the viewer) while either one is moved, resized or tilted.
+    struct Joint { var a: String; var b: String; var eA: Int }      // B sits on A's edge eA (0 left, 1 right, 2 top, 3 bottom)
     private var joints: [Joint] = []
-    private var magnetPending: (id: String, corner: Int)?
+    private var magnetPending: (id: String, edge: Int)?
     private var seamHover: Int?
+    private var lastHead = SIMD3<Float>(0, 0, 0)
+    private var lastJoinBend: Double = -1
+    private var stickyIdx: Int?
     private func panelIndex(_ id: String) -> Int? { panels.firstIndex { $0.id == id } }
     private func size(_ p: PanelRT) -> SIMD2<Float> { SIMD2(p.width, p.width / max(p.aspect, 0.1)) }
 
-    private func makeJoint(a: String, cA: Int, b: String, cB: Int) {
-        guard let ia = panelIndex(a), panelIndex(b) != nil, let nb = MagnetMath.normalizedCornerB(cornerA: cA, cornerB: cB) else {
-            hud.flash("Farklı köşeler seç"); return
-        }
+    private func makeJoint(a: String, eA: Int, b: String) {
+        guard let ia = panelIndex(a), panelIndex(b) != nil, MagnetMath.isValid(eA), a != b else { hud.flash("Geçersiz seçim"); return }
         joints.removeAll { ($0.a == a && $0.b == b) || ($0.a == b && $0.b == a) }
-        joints.append(Joint(a: a, b: b, cA: cA, cB: nb))
+        joints.append(Joint(a: a, b: b, eA: eA))
         enforceJoints(from: ia)
-        settings.onMagnet?(MagnetJoin(panelA: a, cornerA: cA, panelB: b, cornerB: nb))
+        settings.onMagnet?(MagnetJoin(panelA: a, edgeA: eA, panelB: b, edgeB: MagnetMath.opposite(eA)))
         hud.flash("Mıknatıslandı")
     }
 
-    /// Re-place every panel joined (directly or through others) to `leader` so the shared edges stay flush.
-    private func enforceJoints(from leader: Int) {
-        guard !joints.isEmpty else { return }
-        var visited: Set<Int> = [leader], queue = [leader]
+    /// Re-place every panel joined (directly or through others) to `leader`: flush edge to edge, then bent toward the head
+    /// about the shared edge by the "magnet curvature" setting. Returns the panels that were visited.
+    @discardableResult
+    private func enforceJoints(from leader: Int) -> Set<Int> {
+        var visited: Set<Int> = [leader]
+        guard !joints.isEmpty else { return visited }
+        let factor = Float(settings.calibration.joinBend)
+        var queue = [leader]
         while !queue.isEmpty {
             let i = queue.removeFirst()
             guard let wi = panels[i].world else { continue }
@@ -126,23 +131,33 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 if panels[i].id == j.a, let o = panelIndex(j.b) { other = o } else if panels[i].id == j.b, let o = panelIndex(j.a) { other = o; iIsA = false }
                 guard let o = other, !visited.contains(o) else { continue }
                 visited.insert(o); queue.append(o)
-                let off: SIMD2<Float>?
-                if iIsA { off = MagnetMath.centerOffset(aSize: size(panels[i]), bSize: size(panels[o]), cornerA: j.cA, cornerB: j.cB) }
-                else { off = MagnetMath.centerOffset(aSize: size(panels[o]), bSize: size(panels[i]), cornerA: j.cA, cornerB: j.cB).map { -$0 } }
-                guard let off else { continue }
+                let edge = iIsA ? j.eA : MagnetMath.opposite(j.eA)       // the edge of the leader that the follower sits against
+                let si = size(panels[i]), so = size(panels[o])
+                guard let off = MagnetMath.centerOffset(aSize: si, bSize: so, edgeA: edge),
+                      let hinge = MagnetMath.hinge(aSize: si, edgeA: edge) else { continue }
                 var m = wi; m.columns.3 = wi * SIMD4(off.x, off.y, 0, 1)
+                let pw = wi * SIMD4(hinge.point.x, hinge.point.y, 0, 1)
+                let ax = wi * SIMD4(hinge.axis, 0)
+                let hingeP = SIMD3(pw.x, pw.y, pw.z), hingeAxis = SIMD3(ax.x, ax.y, ax.z)
+                let toHead = lastHead - center(of: m)
+                if simd_length(toHead) > 1e-3 {
+                    let n = SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+                    let ang = MagnetMath.bendAngle(normal: n, toHead: simd_normalize(toHead), axis: simd_normalize(hingeAxis), factor: factor)
+                    m = MagnetMath.rotation(about: hingeP, axis: hingeAxis, angle: ang) * m
+                }
                 panels[o].world = m; panels[o].roll = panels[i].roll
                 changed[panels[o].id] = Date()
             }
         }
+        return visited
     }
 
     private func seamIndex(at point: SIMD3<Float>) -> Int? {
         for (k, j) in joints.enumerated() {
             guard let ia = panelIndex(j.a), let ib = panelIndex(j.b), let wa = panels[ia].world,
-                  let seam = MagnetMath.seam(aSize: size(panels[ia]), bSize: size(panels[ib]), cornerA: j.cA, cornerB: j.cB) else { continue }
+                  let seam = MagnetMath.seam(aSize: size(panels[ia]), bSize: size(panels[ib]), edgeA: j.eA) else { continue }
             let l = wa.inverse * SIMD4(point, 1)
-            if seam.contains(l.x, l.y) && abs(l.z) < 0.2 { return k }
+            if seam.contains(l.x, l.y) && abs(l.z) < 0.3 { return k }
         }
         return nil
     }
@@ -186,6 +201,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     /// Panels without a pose are put in a row left → right (new ones go next to the panel before them).
     private func placePending(camera: simd_float4x4, force: Bool) {
         let head = center(of: camera)
+        lastHead = head
         if force { for i in panels.indices { panels[i].world = nil } }
         for i in panels.indices where panels[i].world == nil {
             let ref = panels[i].afterId.flatMap { id in panels.first(where: { $0.id == id && $0.world != nil }) }
@@ -198,6 +214,10 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 panels[i].world = oriented(center: center(of: Self.placePanel(camera: camera, distance: panelDistanceM)), head: head, roll: 0)
             }
             changed[panels[i].id] = Date()
+        }
+        if force {      // "re-centre" must not break magnets: each joined group is rebuilt around its first panel
+            var done = Set<Int>()
+            for i in panels.indices where !done.contains(i) { done.formUnion(enforceJoints(from: i)) }
         }
     }
 
@@ -311,16 +331,29 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         return RayHit(idx: idx, point: p, local: SIMD2(l.x, l.y), t: t)
     }
 
-    /// Nearest panel whose hover area (panel + handles + open picker) the ray passes through.
+    /// The hovered panel is the nearest one whose picture the ray crosses, so overlapping toolbars of neighbours never
+    /// compete. Once a panel is hovered it stays active while the cursor travels over its own handles (outside its picture).
+    /// While a magnet join is armed every panel's handle area counts, so edge magnets of other panels can be reached.
     private func bestHit(head: SIMD3<Float>, dir d: SIMD3<Float>) -> RayHit? {
         var best: RayHit?
         for i in panels.indices {
             guard let h = rayHit(i, head: head, dir: d) else { continue }
             let p = panels[i]
-            guard PanelHandleGeometry.hoverArea(width: p.width, aspect: p.aspect).contains(h.local.x, h.local.y) else { continue }
+            guard abs(h.local.x) <= p.width / 2, abs(h.local.y) <= p.width / max(p.aspect, 0.1) / 2 else { continue }
             if best == nil || h.t < best!.t { best = h }
         }
-        return best
+        if let b = best { stickyIdx = b.idx; return b }
+        if let s = stickyIdx, panels.indices.contains(s), let h = rayHit(s, head: head, dir: d),
+           PanelHandleGeometry.hoverArea(width: panels[s].width, aspect: panels[s].aspect).contains(h.local.x, h.local.y) { return h }
+        if magnetPending != nil {
+            for i in panels.indices {
+                guard let h = rayHit(i, head: head, dir: d) else { continue }
+                if PanelHandleGeometry.hoverArea(width: panels[i].width, aspect: panels[i].aspect).contains(h.local.x, h.local.y), best == nil || h.t < best!.t { best = h }
+            }
+            if let b = best { stickyIdx = b.idx; return b }
+        }
+        stickyIdx = nil
+        return nil
     }
 
     private func updateARCursor(camera: simd_float4x4, hasFrame: Bool) {
@@ -367,26 +400,19 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 }
                 // The picker stays open until a theme is chosen or something else is clicked.
                 if case .theme = region { pickerIdx = hit?.idx } else { pickerIdx = nil }
-                if let k = seamHover, hit != nil {          // X on the seam: break the magnet
-                    joints.remove(at: k); seamHover = nil; hud.flash("Mıknatıs ayrıldı"); break
+                if let h = hit, let k = seamIndex(at: h.point) {      // X on the seam: break the magnet
+                    joints.remove(at: k); hud.flash("Mıknatıs ayrıldı"); break
                 }
                 guard let h = hit else { if magnetPending != nil { magnetPending = nil; hud.flash("İptal") }; break }
                 activeIdx = h.idx
                 let p = panels[h.idx]
-                if let pend = magnetPending {               // second click of a magnet join
-                    if p.id != pend.id {
-                        var cB: Int
-                        if case .magnet(let kk) = region { cB = kk }
-                        else { let sg = MagnetMath.sign(pend.corner); cB = MagnetMath.corner(sx: -sg.x, sy: sg.y) }
-                        magnetPending = nil
-                        makeJoint(a: pend.id, cA: pend.corner, b: p.id, cB: cB)
-                        break
-                    }
-                    if case .magnet(let kk) = region, kk != pend.corner { magnetPending = (p.id, kk); hud.flash("Köşe değişti"); break }
+                if let pend = magnetPending {               // second click of a magnet join: any other screen attaches
+                    if p.id != pend.id { magnetPending = nil; makeJoint(a: pend.id, eA: pend.edge, b: p.id); break }
+                    if case .magnet(let kk) = region, kk != pend.edge { magnetPending = (p.id, kk); hud.flash("Kenar değişti"); break }
                     magnetPending = nil; hud.flash("İptal"); break
                 }
                 switch region {
-                case .magnet(let k): magnetPending = (p.id, k); hud.flash("Şimdi diğer ekranın köşesine ya da kendisine tıkla")
+                case .magnet(let k): magnetPending = (p.id, k); hud.flash("Şimdi yapıştırılacak ekrana tıkla")
                 case .content(let u, let v): settings.onEnterScreen?(p.id, u, v)
                 case .moveBar: drag = .move; dragIdx = h.idx; dragLocal = PanelHandleGeometry.moveBar(width: p.width, aspect: p.aspect).center
                 case .resizeCorner(let k):
@@ -461,7 +487,13 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         let frame = ar.latestFrame
         let camT = frame?.camera.transform ?? matrix_identity_float4x4
         syncScene()
+        if frame != nil { lastHead = center(of: camT) }
         if frame != nil { placePending(camera: camT, force: settings.takeRecenter()) }
+        if cal.joinBend != lastJoinBend {      // curvature slider moved: rebuild every joined group
+            lastJoinBend = cal.joinBend
+            var done = Set<Int>()
+            for i in panels.indices where !done.contains(i) { done.formUnion(enforceJoints(from: i)) }
+        }
         applyCommands(camera: camT, hasFrame: frame != nil)
         // Panel textures first so aspect ratios are current for hit testing.
         var tex: [Int: (MTLTexture, Float)] = [:]
@@ -579,8 +611,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             for (i, pnl) in panels.enumerated() where pnl.world != nil && (magnetPending != nil || (handlesVisible && handlesPanel == i)) {
                 guard let model = pnl.world, let handles = cursor.handles else { continue }
                 for (k, r) in PanelHandleGeometry.magnets(width: pnl.width, aspect: pnl.aspect).enumerated() {
-                    let armed = magnetPending.map { $0.id == pnl.id && $0.corner == k } ?? false
-                    let joined = joints.contains { ($0.a == pnl.id && $0.cA == k) || ($0.b == pnl.id && $0.cB == k) }
+                    let armed = magnetPending.map { $0.id == pnl.id && $0.edge == k } ?? false
+                    let joined = joints.contains { ($0.a == pnl.id && $0.eA == k) || ($0.b == pnl.id && MagnetMath.opposite($0.eA) == k) }
                     var hot = false; if hoverIdx == i, case .magnet(let kk) = hover { hot = kk == k }
                     guard let t = handles.get(armed || joined ? "magnetOn" : "magnet", hot: hot) else { continue }
                     var m = model; m.columns.3 = model * SIMD4(r.cx, r.cy, 0.006, 1)
