@@ -1,4 +1,5 @@
 import MetalKit
+import ARKit
 import CoreVideo
 import simd
 import DesktopARShared
@@ -15,18 +16,19 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private let settings: StereoSettings
     private let cursor: CursorOverlay
     private let spritePipeline: MTLRenderPipelineState
-    private let head = HeadPose()
+    private let ar: ARSessionController
+    private let cameraPipeline: MTLRenderPipelineState
+    private var panelWorld: simd_float4x4?
     private var eyeTextures: [MTLTexture] = []
     private var eyeSize = (width: 0, height: 0)
-    private var framesSeen = 0
 
     private let panelWidthM: Float = 1.3
     private let panelDistanceM: Float = 1.4
     private let screenMm = LensMath.iPhone13ProScreenMm
 
-    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings, cursor: CursorOverlay) {
+    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings, cursor: CursorOverlay, ar: ARSessionController) {
         guard let dev = MTLCreateSystemDefaultDevice(), let q = dev.makeCommandQueue(), let lib = dev.makeDefaultLibrary() else { return nil }
-        device = dev; queue = q; self.decoder = decoder; self.settings = settings; self.cursor = cursor
+        device = dev; queue = q; self.decoder = decoder; self.settings = settings; self.cursor = cursor; self.ar = ar
         func pipe(_ v: String, _ f: String, _ fmt: MTLPixelFormat) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = lib.makeFunction(name: v); d.fragmentFunction = lib.makeFunction(name: f)
@@ -44,6 +46,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         ca.sourceAlphaBlendFactor = .one; ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
         guard let sp = try? dev.makeRenderPipelineState(descriptor: sd) else { return nil }
         spritePipeline = sp
+        guard let cam = pipe("cameraVertex", "cameraFragment", .bgra8Unorm) else { return nil }
+        cameraPipeline = cam
         panelPipeline = a; testPipeline = b; distortPipeline = c
         CVMetalTextureCacheCreate(nil, nil, dev, nil, &cache)
         super.init()
@@ -73,20 +77,45 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         return (mt, Float(w) / Float(h))
     }
 
+    /// Panel in front of the camera at its eye height, facing the user, fixed in world space.
+    static func placePanel(camera: simd_float4x4, distance: Float) -> simd_float4x4 {
+        let pos = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
+        var fwd = -SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z)
+        fwd.y = 0
+        fwd = simd_length(fwd) < 1e-3 ? SIMD3(0, 0, -1) : simd_normalize(fwd)
+        let z = -fwd, up = SIMD3<Float>(0, 1, 0), x = simd_normalize(simd_cross(up, z))
+        let c = pos + fwd * distance
+        return simd_float4x4(columns: (SIMD4(x, 0), SIMD4(up, 0), SIMD4(z, 0), SIMD4(c, 1)))
+    }
+
+    private func cameraTextures(_ frame: ARFrame?) -> (MTLTexture, MTLTexture, ARFrame)? {
+        guard let frame, let cache else { return nil }
+        let pb = frame.capturedImage
+        func tex(_ plane: Int, _ fmt: MTLPixelFormat) -> MTLTexture? {
+            var t: CVMetalTexture?
+            CVMetalTextureCacheCreateTextureFromImage(nil, cache, pb, nil, fmt, CVPixelBufferGetWidthOfPlane(pb, plane),
+                                                      CVPixelBufferGetHeightOfPlane(pb, plane), plane, &t)
+            return t.flatMap { CVMetalTextureGetTexture($0) }
+        }
+        guard let y = tex(0, .r8Unorm), let c = tex(1, .rg8Unorm) else { return nil }
+        return (y, c, frame)
+    }
+
     func draw(in view: MTKView) {
         let cal = settings.calibration
         let ds = view.drawableSize
         guard ds.width > 0, let drawable = view.currentDrawable, let cb = queue.makeCommandBuffer() else { return }
         ensureEyeTextures(cal, drawable: ds)
         guard eyeTextures.count == 2 else { return }
-        if decoder.latest != nil { framesSeen += 1 }
-        head.invert = settings.invertHead
-        if settings.takeRecenter() || framesSeen == 90 { head.recenter() }
-
+        let frame = ar.latestFrame
+        let camT = frame?.camera.transform ?? matrix_identity_float4x4
+        if frame != nil, settings.takeRecenter() || panelWorld == nil {
+            panelWorld = Self.placePanel(camera: camT, distance: panelDistanceM)
+        }
+        let panelModel = panelWorld ?? { var m = matrix_identity_float4x4; m.columns.3 = SIMD4(0, 0, -panelDistanceM, 1); return m }()
+        let v4 = camT.inverse                      // world -> head (camera) space, full 6DoF
         let video = videoTexture()
-        let rot = head.viewRotation()
-        var v4 = simd_float4x4(1)
-        v4.columns.0 = SIMD4(rot.columns.0, 0); v4.columns.1 = SIMD4(rot.columns.1, 0); v4.columns.2 = SIMD4(rot.columns.2, 0)
+        let cameraTex = settings.passthrough ? cameraTextures(frame) : nil
         let ipd = Float(cal.lensSeparationMm) / 1000
         let aspectEye = Double(eyeSize.width) / Double(eyeSize.height)
         let proj = LensMath.perspective(verticalFovDegrees: cal.fovDegrees, aspect: aspectEye, near: 0.05, far: 50)
@@ -98,6 +127,20 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.01, green: 0.01, blue: 0.012, alpha: 1)
             rpd.colorAttachments[0].storeAction = .store
             guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            if let (yT, cT, cf) = cameraTex, !cal.testPattern {
+                let res = cf.camera.imageResolution, K = cf.camera.intrinsics
+                let w = Float(res.width), h = Float(res.height), D: Float = 8
+                let fx = K[0][0], fy = K[1][1], cx = K[2][0], cy = K[2][1]
+                var shift = simd_float4x4(1)
+                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
+                struct CU { var mvp: simd_float4x4; var xr: SIMD2<Float>; var yr: SIMD2<Float>; var z: Float }
+                var cu = CU(mvp: proj * shift,
+                            xr: SIMD2(-cx / fx * D, (w - cx) / fx * D), yr: SIMD2(-(h - cy) / fy * D, cy / fy * D), z: -D)
+                enc.setRenderPipelineState(cameraPipeline)
+                enc.setVertexBytes(&cu, length: MemoryLayout<CU>.size, index: 0)
+                enc.setFragmentTexture(yT, index: 0); enc.setFragmentTexture(cT, index: 1)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
             if cal.testPattern || video == nil {
                 var asp = Float(aspectEye); var sc = SIMD2<Float>(1, 1)
                 enc.setRenderPipelineState(testPipeline)
@@ -107,8 +150,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             } else if let (tex, aspect) = video {
                 var shift = simd_float4x4(1)
                 shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
-                var model = simd_float4x4(1)
-                model.columns.3 = SIMD4(0, 0, -panelDistanceM, 1)
+                let model = panelModel
                 struct U { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
                 var u = U(mvp: proj * shift * v4 * model, halfSize: SIMD2(panelWidthM / 2, panelWidthM / 2 / aspect))
                 enc.setRenderPipelineState(panelPipeline)
@@ -121,7 +163,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                                                     displayWidthPt: c.displayWidthPt, aspect: Double(aspect), scale: 1.5)
                     let ph = panelWidthM / aspect
                     var cm = model
-                    cm.columns.3 = SIMD4(Float(r.center.x - 0.5) * panelWidthM, Float(0.5 - r.center.y) * ph, -panelDistanceM + 0.004, 1)
+                    cm = model * { var t = matrix_identity_float4x4; t.columns.3 = SIMD4(Float(r.center.x - 0.5) * panelWidthM, Float(0.5 - r.center.y) * ph, 0.004, 1); return t }()
                     var cu = U(mvp: proj * shift * v4 * cm, halfSize: SIMD2(Float(r.size.x) * panelWidthM / 2, Float(r.size.y) * ph / 2))
                     enc.setRenderPipelineState(spritePipeline)
                     enc.setVertexBytes(&cu, length: MemoryLayout<U>.size, index: 0)

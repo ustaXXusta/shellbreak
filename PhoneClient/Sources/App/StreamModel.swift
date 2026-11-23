@@ -13,6 +13,7 @@ final class StreamModel: ObservableObject {
     let connection = HostConnection()
     let settings = StereoSettings()
     let cursor = CursorOverlay()
+    let ar = ARSessionController()
     @Published var stereo = true
     let decoder = VideoDecoder()
     private var lastIDR = Date.distantPast
@@ -33,6 +34,7 @@ final class StreamModel: ObservableObject {
         connection.onMessage = { [weak self] msg in
             switch msg {
             case .calibration(let c): self?.settings.calibration = c
+            case .mode(let m): self?.settings.passthrough = m.passthrough
             case .cursor(let c): self?.cursor.update(c)
             case .cursorImage(let i): self?.cursor.update(i)
             case .hud(let h) where h.text == "!recenter": self?.settings.requestRecenter()
@@ -41,6 +43,7 @@ final class StreamModel: ObservableObject {
         }
         connection.onVideoPacket = { [weak self] p in self?.handle(p) }
         decoder.onDecoded = { [weak self] captureUs in self?.decoded(captureUs) }
+        ar.start()
         connection.start()
     }
 

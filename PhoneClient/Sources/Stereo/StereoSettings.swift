@@ -7,7 +7,7 @@ final class StereoSettings: @unchecked Sendable {
     private var _calibration = Calibration()
     private var _stereo = true
     private var _recenter = true
-    private var _invert = false
+    private var _passthrough = true
 
     var calibration: Calibration {
         get { lock.lock(); defer { lock.unlock() }; return _calibration }
@@ -17,9 +17,9 @@ final class StereoSettings: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _stereo }
         set { lock.lock(); _stereo = newValue; _recenter = true; lock.unlock() }
     }
-    var invertHead: Bool {
-        get { lock.lock(); defer { lock.unlock() }; return _invert }
-        set { lock.lock(); _invert = newValue; lock.unlock() }
+    var passthrough: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _passthrough }
+        set { lock.lock(); _passthrough = newValue; lock.unlock() }
     }
     func requestRecenter() { lock.lock(); _recenter = true; lock.unlock() }
     func takeRecenter() -> Bool { lock.lock(); defer { lock.unlock() }; let r = _recenter; _recenter = false; return r }

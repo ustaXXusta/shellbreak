@@ -39,9 +39,9 @@ Legend: **[S]** Shared · **[M]** MacHost · **[P]** PhoneClient · **[U]** need
 - [ ] [U] Calibrate until the grid is straight and the crosses fuse
 
 **F4 · ARKit passthrough**
-- [ ] [P] World tracking, 60 fps video format, plane detection
-- [ ] [P] Camera background scaled from intrinsics, same pose as the panels
-- [ ] [P] World-anchored panel; passthrough ↔ VR mode
+- [x] [P] World tracking, 60 fps video format, plane detection
+- [x] [P] Camera background scaled from intrinsics, same pose as the panels
+- [x] [P] World-anchored panel; passthrough ↔ VR mode
 
 **F5 · All desktops**
 - [ ] [S] Panel/scene model, layout math (+ tests)

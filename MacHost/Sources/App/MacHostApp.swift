@@ -24,6 +24,7 @@ struct MacHostApp: App {
                 Toggle("Debug: ~/Desktop/stream.h265", isOn: $host.dumpToDesktop)
                 Divider()
                 Text("Gözlük kalibrasyonu").font(.headline)
+                Toggle("Gerçek dünya (passthrough)", isOn: $host.passthrough)
                 Toggle("Test deseni (ızgara + artı)", isOn: $host.calibration.testPattern)
                 slider("Lens arası (mm)", $host.calibration.lensSeparationMm, 50...75, "%.1f")
                 slider("Dikey kayma (mm)", $host.calibration.verticalOffsetMm, -15...15, "%.1f")

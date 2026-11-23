@@ -86,3 +86,26 @@ fragment float4 spriteFragment(VOut in [[stage_in]], texture2d<float> tex [[text
     float4 c = tex.sample(s, in.uv);
     return float4(c.rgb * c.a, c.a);   // premultiplied output, blend one / oneMinusSrcAlpha
 }
+
+// ---------------------------------------------------------------- F4 camera passthrough
+
+struct CameraUniforms { float4x4 mvp; float2 xr; float2 yr; float z; };
+
+// Quad whose corners are the camera image's pixel rays at distance |z| (principal point and focal length baked in).
+vertex VOut cameraVertex(uint vid [[vertex_id]], constant CameraUniforms &u [[buffer(0)]]) {
+    const float2 t[4] = { float2(0, 1), float2(1, 1), float2(0, 0), float2(1, 0) };
+    float2 uv = t[vid];
+    float x = mix(u.xr.x, u.xr.y, uv.x);
+    float y = mix(u.yr.x, u.yr.y, 1.0 - uv.y);   // yr.x = bottom, yr.y = top
+    VOut o; o.pos = u.mvp * float4(x, y, u.z, 1); o.uv = uv; return o;
+}
+
+fragment float4 cameraFragment(VOut in [[stage_in]], texture2d<float> yTex [[texture(0)]],
+                               texture2d<float> cbcrTex [[texture(1)]]) {
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    const float4x4 m = float4x4(float4(1.0, 1.0, 1.0, 0.0), float4(0.0, -0.3441, 1.772, 0.0),
+                                float4(1.402, -0.7141, 0.0, 0.0), float4(-0.701, 0.5291, -0.886, 1.0));
+    float y = yTex.sample(s, in.uv).r;
+    float2 c = cbcrTex.sample(s, in.uv).rg;
+    return float4(saturate((m * float4(y, c, 1.0)).rgb), 1.0);
+}
