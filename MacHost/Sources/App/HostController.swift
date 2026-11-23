@@ -13,6 +13,21 @@ final class HostController: ObservableObject {
     @Published var codecName = "-"
     @Published var dumpToDesktop = false { didSet { updateDump() } }
     @Published var lastError: String?
+    @Published var calibration: Calibration = HostController.loadCalibration() {
+        didSet { saveCalibration(); server.send(.calibration(calibration)) }
+    }
+
+    private static let calibrationKey = "calibration.v1"
+    private static func loadCalibration() -> Calibration {
+        guard let d = UserDefaults.standard.data(forKey: calibrationKey),
+              let c = try? JSONDecoder().decode(Calibration.self, from: d) else { return Calibration() }
+        return c
+    }
+    private func saveCalibration() {
+        if let d = try? JSONEncoder().encode(calibration) { UserDefaults.standard.set(d, forKey: Self.calibrationKey) }
+    }
+    func recenterPhone() { server.send(.hud(HUD(text: "!recenter"))) }
+    func resetCalibration() { calibration = Calibration() }
 
     private let capture = DisplayCapture()
     private var encoder: VideoEncoder?
@@ -37,6 +52,12 @@ final class HostController: ObservableObject {
             }
             server.onConnectionChange = { [weak self] up in Task { @MainActor in self?.phoneConnected = up } }
             server.onNeedKeyframe = { [weak enc] _ in enc?.requestKeyframe() }
+            server.onMessage = { [weak self] msg in
+                if case .hello = msg { Task { @MainActor in
+                    guard let self else { return }
+                    self.server.send(.calibration(self.calibration))
+                } }
+            }
             try server.start()
             capture.onFrame = { [weak enc] pb in enc?.encode(pb) }
             try await capture.start(displayID: id, width: w, height: h)

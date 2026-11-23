@@ -9,15 +9,18 @@ struct PhoneClientApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .topLeading) {
-                MetalVideoView(decoder: model.decoder).ignoresSafeArea()
-                VStack(alignment: .leading, spacing: 2) {
+                MetalVideoView(decoder: model.decoder, settings: model.settings, stereo: model.stereo).ignoresSafeArea()
+                if !model.stereo { VStack(alignment: .leading, spacing: 2) {
                     Text(model.status)
                     Text(String(format: "%.0f ms · %.0f fps · %@", model.latencyMs, model.fps, model.codec))
                 }
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(model.latencyMs > 300 ? .red : .green)
-                .padding(8)
+                .padding(8) }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(count: 3) { model.settings.invertHead.toggle(); model.settings.requestRecenter() }
+            .onTapGesture(count: 2) { model.toggleStereo() }
             .background(Color.black)
             .statusBarHidden(true)
             .persistentSystemOverlays(.hidden)
@@ -31,15 +34,21 @@ struct PhoneClientApp: App {
 
 struct MetalVideoView: UIViewRepresentable {
     let decoder: VideoDecoder
+    let settings: StereoSettings
+    let stereo: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
-    final class Coordinator { var renderer: FlatRenderer? }
+    final class Coordinator { var flat: FlatRenderer?; var stereo: StereoRenderer? }
 
     func makeUIView(context: Context) -> MTKView {
         let v = MTKView()
         v.colorPixelFormat = .bgra8Unorm
-        context.coordinator.renderer = FlatRenderer(view: v, decoder: decoder)
+        context.coordinator.flat = FlatRenderer(view: v, decoder: decoder)
+        context.coordinator.stereo = StereoRenderer(view: v, decoder: decoder, settings: settings)
+        v.delegate = stereo ? context.coordinator.stereo : context.coordinator.flat
         return v
     }
-    func updateUIView(_ uiView: MTKView, context: Context) {}
+    func updateUIView(_ v: MTKView, context: Context) {
+        v.delegate = stereo ? context.coordinator.stereo : context.coordinator.flat
+    }
 }

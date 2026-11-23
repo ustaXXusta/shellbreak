@@ -19,23 +19,23 @@ Legend: **[S]** Shared · **[M]** MacHost · **[P]** PhoneClient · **[U]** need
 - [x] [M] `DisplayCapture` of the built-in display, 60 fps, `showsCursor = false`
 - [x] [M] `VideoEncoder`: HEVC low-latency, H.264 fallback, Annex-B with inline parameter sets
 - [x] [M] `HostServer`: Bonjour + WebSocket control + TCP video, back-pressure
-- [ ] [M] Debug dump to `~/Desktop/stream.h265`, verify with `ffplay`
+- [x] [M] Debug dump to `~/Desktop/stream.h265`, verify with `ffplay`
 
 **F2 · Flat iPhone client**
-- [ ] [P] `HostConnection`: discover, connect both channels, `hello`, `ping`/`pong`, auto-reconnect
-- [ ] [P] `VideoDecoder` → Metal texture → full-screen quad
-- [ ] [P] Latency overlay + 300/500 ms watchdog
-- [ ] [U] Glass-to-glass latency: photograph a ms counter on both screens, 10 samples
+- [x] [P] `HostConnection`: discover, connect both channels, `hello`, `ping`/`pong`, auto-reconnect
+- [x] [P] `VideoDecoder` → Metal texture → full-screen quad
+- [x] [P] Latency overlay + 300/500 ms watchdog
+- [x] [U] Glass-to-glass latency: photograph a ms counter on both screens, 10 samples
 
 **Gate 1:** Mac screen smooth on the iPhone; measured latency < 500 ms (target 60–120 ms).
 
 ### Stage 2 — Screens in the headset
 
 **F3 · Stereo + lenses**
-- [ ] [P] Two eye textures, per-eye projection, IPD
-- [ ] [P] Distortion pass: barrel, chromatic correction, circular mask, sharpen
-- [ ] [P][M] Test pattern; live calibration from the Mac control panel
-- [ ] [P] Panel fixed in rotation with CoreMotion (sanity check before ARKit)
+- [x] [P] Two eye textures, per-eye projection, IPD
+- [x] [P] Distortion pass: barrel, chromatic correction, circular mask, sharpen
+- [x] [P][M] Test pattern; live calibration from the Mac control panel
+- [x] [P] Panel fixed in rotation with CoreMotion (sanity check before ARKit)
 - [ ] [U] Calibrate until the grid is straight and the crosses fuse
 
 **F4 · ARKit passthrough**

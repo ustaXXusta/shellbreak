@@ -11,6 +11,8 @@ final class StreamModel: ObservableObject {
     @Published var codec = "-"
 
     let connection = HostConnection()
+    let settings = StereoSettings()
+    @Published var stereo = true
     let decoder = VideoDecoder()
     private var lastIDR = Date.distantPast
     private var overSince: Date?
@@ -18,11 +20,20 @@ final class StreamModel: ObservableObject {
     private var fpsTick = Date()
     private var latencyAcc: [Double] = []
 
+    func toggleStereo() { stereo.toggle(); settings.stereo = stereo }
+
     func start() {
         connection.onState = { [weak self] s in
             Task { @MainActor in
                 self?.status = s
                 if s.hasPrefix("Yeniden") { /* keep last frame on screen */ }
+            }
+        }
+        connection.onMessage = { [weak self] msg in
+            switch msg {
+            case .calibration(let c): self?.settings.calibration = c
+            case .hud(let h) where h.text == "!recenter": self?.settings.requestRecenter()
+            default: break
             }
         }
         connection.onVideoPacket = { [weak self] p in self?.handle(p) }

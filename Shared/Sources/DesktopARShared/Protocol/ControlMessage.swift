@@ -102,12 +102,30 @@ public struct GazeFocus: Codable, Equatable { public var panelId: String; public
 public struct Calibration: Codable, Equatable {
     public var lensSeparationMm: Double, screenToLensMm: Double, verticalOffsetMm: Double
     public var k1: Double, k2: Double, fovDegrees: Double, chromaticAberration: Double, sharpen: Double, supersample: Double
+    /// Show the grid + centre-cross test pattern instead of the video (optional on the wire, default false).
+    public var testPattern: Bool
     public init(lensSeparationMm: Double = 63, screenToLensMm: Double = 39, verticalOffsetMm: Double = 0,
                 k1: Double = 0.34, k2: Double = 0.55, fovDegrees: Double = 90,
-                chromaticAberration: Double = 0.008, sharpen: Double = 0.3, supersample: Double = 1.25) {
+                chromaticAberration: Double = 0.008, sharpen: Double = 0.3, supersample: Double = 1.25,
+                testPattern: Bool = false) {
         self.lensSeparationMm = lensSeparationMm; self.screenToLensMm = screenToLensMm
         self.verticalOffsetMm = verticalOffsetMm; self.k1 = k1; self.k2 = k2; self.fovDegrees = fovDegrees
         self.chromaticAberration = chromaticAberration; self.sharpen = sharpen; self.supersample = supersample
+        self.testPattern = testPattern
+    }
+    private enum CodingKeys: String, CodingKey {
+        case lensSeparationMm, screenToLensMm, verticalOffsetMm, k1, k2, fovDegrees, chromaticAberration, sharpen, supersample, testPattern
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        lensSeparationMm = try c.decode(Double.self, forKey: .lensSeparationMm)
+        screenToLensMm = try c.decode(Double.self, forKey: .screenToLensMm)
+        verticalOffsetMm = try c.decode(Double.self, forKey: .verticalOffsetMm)
+        k1 = try c.decode(Double.self, forKey: .k1); k2 = try c.decode(Double.self, forKey: .k2)
+        fovDegrees = try c.decode(Double.self, forKey: .fovDegrees)
+        chromaticAberration = try c.decode(Double.self, forKey: .chromaticAberration)
+        sharpen = try c.decode(Double.self, forKey: .sharpen); supersample = try c.decode(Double.self, forKey: .supersample)
+        testPattern = try c.decodeIfPresent(Bool.self, forKey: .testPattern) ?? false
     }
 }
 public struct ModeMessage: Codable, Equatable { public var passthrough: Bool; public init(passthrough: Bool) { self.passthrough = passthrough } }
