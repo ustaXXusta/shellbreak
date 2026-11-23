@@ -138,7 +138,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 default: break
                 }
             }
-            panelWorld = LayoutMath.facing(center: center, head: head)
+            panelWorld = oriented(center: center, head: head)
             changedAt = Date()
         }
         if let t = changedAt, Date().timeIntervalSince(t) > 0.3, let w = panelWorld {
@@ -154,6 +154,15 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var hover: PanelRegion = .none
     private var handlesVisible = false
     private var pickerOpen = false
+    private var panelRoll: Float = 0
+    private func oriented(center: SIMD3<Float>, head: SIMD3<Float>) -> simd_float4x4 {
+        let f = LayoutMath.facing(center: center, head: head)
+        guard panelRoll != 0 else { return f }
+        let c = cos(panelRoll), s = sin(panelRoll)
+        var r = matrix_identity_float4x4
+        r.columns.0 = SIMD4(c, s, 0, 0); r.columns.1 = SIMD4(-s, c, 0, 0)
+        return f * r
+    }
     static let themeNames = ["Siyah", "Lav lambası", "Vice City", "Yağmur", "Güneşli", "Matrix", "Cyberpunk", "Steampunk", "Solarpunk"]
 
     /// Layout-mode mouse: steer a head-relative ray, hit-test it against the panel and its handles,
@@ -161,7 +170,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private func updateARCursor(camera: simd_float4x4, hasFrame: Bool, aspect: Float) {
         let layout = settings.layoutActive
         if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0; drag = nil }
-        handModel = nil; handUV = nil; handlesVisible = false; hover = .none; let wasPicker = pickerOpen; pickerOpen = false
+        handModel = nil; handUV = nil; handlesVisible = false; hover = .none
         guard layout, hasFrame, var panel = panelWorld else { pickerOpen = false; _ = settings.takeInputs(); drag = nil; return }
         let head = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
         let width = settings.panelWidthM
@@ -190,7 +199,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     switch dr {
                     case .move:
                         center = LayoutMath.moved(center: center, head: head, dYaw: -Float(i.dx) * 0.0022, dPitch: -Float(i.dy) * 0.0022, dRadius: 0)
-                        panel = LayoutMath.facing(center: center, head: head)
+                        panel = oriented(center: center, head: head)
                         panelWorld = panel
                     case .resize:
                         settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM * (1 + Float(i.dx + i.dy) * 0.003))
@@ -201,12 +210,20 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     arPitch = max(-0.45, min(0.45, arPitch - Float(i.dy) * 0.0022))
                 }
             case "down":
-                if drag == nil, let h = rayHit() {
-                    switch PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: settings.panelWidthM, aspect: aspect, pickerOpen: wasPicker) {
+                if drag == nil {
+                    let hit = rayHit()
+                    let region = hit.map { PanelHandleGeometry.hit(x: $0.local.x, y: $0.local.y, width: settings.panelWidthM, aspect: aspect, pickerOpen: pickerOpen) } ?? .none
+                    // The picker stays open until a theme is chosen or something else is clicked.
+                    switch region { case .theme: break; case .themeChoice: pickerOpen = false; default: pickerOpen = false }
+                    switch region {
                     case .content(let u, let v): settings.onEnterScreen?(u, v)
                     case .moveBar: drag = .move; dragLocal = PanelHandleGeometry.moveBar(width: settings.panelWidthM, aspect: aspect).center
                     case .resizeCorner: drag = .resize; dragLocal = PanelHandleGeometry.resizeCorner(width: settings.panelWidthM, aspect: aspect).center
-                    case .rotate: hud.flash("Ana ekran döndürülemez")
+                    case .rotate:
+                        panelRoll = panelRoll == 0 ? .pi / 2 : 0
+                        panelWorld = oriented(center: SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z), head: head)
+                        panel = panelWorld ?? panel; changedAt = Date()
+                        hud.flash(panelRoll == 0 ? "Yatay" : "Dikey")
                     case .darken: settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "Dünya karartıldı")
                     case .theme: break
                     case .themeChoice(let i):
@@ -232,8 +249,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             handlesVisible = true; hover = dr == .move ? .moveBar : .resizeCorner
             handHalfSize = 0.0225 * 1.4
         } else if let h = rayHit() {
-            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: w, aspect: aspect, pickerOpen: wasPicker)
-            switch region { case .theme, .themeChoice: pickerOpen = true; default: break }
+            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: w, aspect: aspect, pickerOpen: pickerOpen)
+            if region == .theme { pickerOpen = true }
             let area = PanelHandleGeometry.hoverArea(width: w, aspect: aspect)
             if area.contains(h.local.x, h.local.y) {
                 hover = region; handlesVisible = true
@@ -252,6 +269,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             model = m; handHalfSize = 0.0225 * 2
         }
         var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, -handHalfSize, 0, 1)   // fingertip at the hit point
+        if pickerOpen { handlesVisible = true }
         handModel = model * off
         handHalf = handHalfSize
     }
@@ -346,28 +364,29 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 var shift = simd_float4x4(1)
                 shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
                 struct HC { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
-                func draw(_ r: LocalRect, _ tex: MTLTexture, hot: Bool) {
+                func draw(_ r: LocalRect, _ key: String, hot: Bool) {
+                    guard let tex = handles.get(key, hot: hot) else { return }
                     var m = panelModel; m.columns.3 = panelModel * SIMD4(r.cx, r.cy, 0.006, 1)
-                    let k: Float = hot ? 1.15 : 1
+                    let k: Float = hot ? 1.1 : 1
                     var hc = HC(mvp: proj * shift * v4 * m, halfSize: SIMD2(r.w / 2 * k, r.h / 2 * k))
                     enc.setRenderPipelineState(spritePipeline)
                     enc.setVertexBytes(&hc, length: MemoryLayout<HC>.size, index: 0)
                     enc.setFragmentTexture(tex, index: 0)
                     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
-                draw(PanelHandleGeometry.moveBar(width: w, aspect: asp), handles.bar, hot: hover == .moveBar)
-                draw(PanelHandleGeometry.resizeCorner(width: w, aspect: asp), handles.corner, hot: hover == .resizeCorner)
+                draw(PanelHandleGeometry.moveBar(width: w, aspect: asp), "bar", hot: hover == .moveBar)
+                draw(PanelHandleGeometry.resizeCorner(width: w, aspect: asp), "corner", hot: hover == .resizeCorner)
                 let b = PanelHandleGeometry.buttons(width: w, aspect: asp)
-                draw(b[0], handles.rotate, hot: hover == .rotate)
-                draw(b[1], handles.add, hot: hover == .add)
-                draw(b[2], handles.close, hot: hover == .close)
-                draw(b[3], handles.dark, hot: hover == .darken)
-                draw(b[4], handles.theme, hot: hover == .theme)
+                draw(b[0], "rotate", hot: hover == .rotate)
+                draw(b[1], "add", hot: hover == .add)
+                draw(b[2], "close", hot: hover == .close)
+                draw(b[3], "dark", hot: hover == .darken || !settings.passthrough)
+                draw(b[4], "theme", hot: hover == .theme || pickerOpen)
                 if pickerOpen {
                     let c = PanelHandleGeometry.themeCircles(width: w, aspect: asp)
                     for (i, r) in c.enumerated() {
                         var sel = false; if case .themeChoice(let k) = hover { sel = k == i }
-                        draw(r, handles.circles[i], hot: sel || (!settings.passthrough && settings.theme == i))
+                        draw(r, "c\(i)", hot: sel || (!settings.passthrough && settings.theme == i))
                     }
                 }
             }

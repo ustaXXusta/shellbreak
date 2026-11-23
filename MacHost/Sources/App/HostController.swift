@@ -1,8 +1,37 @@
 import Foundation
 import CoreGraphics
+import AppKit
 import SwiftUI
 import DesktopARShared
 import os
+
+/// One panel as the Mac sees it (mirror of the built-in display, or a virtual display).
+struct PanelModel: Identifiable, Equatable {
+    var id: String
+    var kind: PanelKind
+    var streamId: Int
+    var desktopIndex: Int
+    var widthM: Double
+    var aspect: Double
+    var orientation: PanelOrientation = .landscape
+    var displayID: CGDirectDisplayID
+    var transform: [Float]?
+    var info: PanelInfo {
+        PanelInfo(id: id, kind: kind, streamId: streamId, desktopIndex: desktopIndex, widthM: widthM, aspect: aspect,
+                  orientation: orientation, transform: transform)
+    }
+}
+
+/// Thread-safe streamId → pipeline lookup for callbacks that run off the main actor.
+final class StreamRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var map: [UInt8: PanelStream] = [:]
+    func set(_ s: PanelStream) { lock.lock(); map[s.streamId] = s; lock.unlock() }
+    func remove(_ id: UInt8) { lock.lock(); map[id] = nil; lock.unlock() }
+    func get(_ id: UInt8) -> PanelStream? { lock.lock(); defer { lock.unlock() }; return map[id] }
+    func all() -> [PanelStream] { lock.lock(); defer { lock.unlock() }; return Array(map.values) }
+    func clear() { lock.lock(); map = [:]; lock.unlock() }
+}
 
 @MainActor
 final class HostController: ObservableObject {
@@ -13,19 +42,32 @@ final class HostController: ObservableObject {
     @Published var codecName = "-"
     @Published var dumpToDesktop = false { didSet { updateDump() } }
     @Published var lastError: String?
+    @Published var panels: [PanelModel] = []
     @Published var panelWidthM: Double = {
         let v = UserDefaults.standard.double(forKey: "panelWidthM"); return v > 0 ? v : 2.0
-    }() { didSet { UserDefaults.standard.set(panelWidthM, forKey: "panelWidthM"); if !suppressScene { sendScene() } } }
+    }() { didSet {
+        UserDefaults.standard.set(panelWidthM, forKey: "panelWidthM")
+        if let i = panels.firstIndex(where: { $0.kind == .mirror }) { panels[i].widthM = panelWidthM }
+        if !suppressScene { sendScene() }
+    } }
     private var sceneRevision = 0
     private var suppressScene = false
-    private func applyPhonePanelWidth(_ w: Double) {
-        suppressScene = true; panelWidthM = w; suppressScene = false
-    }
+    private var virtuals: [String: VirtualDisplay] = [:]
+    private let registry = StreamRegistry()
+    private var controlWindow: NSWindow?
+    private let maxVirtualDisplays = 5
+
     func sendScene() {
         sceneRevision += 1
-        server.send(.scene(SceneMessage(revision: sceneRevision, panels: [
-            PanelInfo(id: "desktop-1", kind: .mirror, streamId: 0, desktopIndex: 1, widthM: panelWidthM, aspect: 1.6)])))
+        server.send(.scene(SceneMessage(revision: sceneRevision, panels: panels.map(\.info))))
     }
+
+    private func applyPhoneUpdate(_ u: PanelUpdate) {
+        guard let i = panels.firstIndex(where: { $0.id == u.panelId }) else { return }
+        panels[i].transform = u.transform; panels[i].widthM = u.widthM
+        if panels[i].kind == .mirror { suppressScene = true; panelWidthM = u.widthM; suppressScene = false }
+    }
+
     @Published var passthrough = true { didSet { server.send(.mode(ModeMessage(passthrough: passthrough))) } }
     @Published var calibration: Calibration = HostController.loadCalibration() {
         didSet { saveCalibration(); server.send(.calibration(calibration)) }
@@ -43,8 +85,6 @@ final class HostController: ObservableObject {
     func recenterPhone() { server.send(.hud(HUD(text: "!recenter"))) }
     func resetCalibration() { calibration = Calibration() }
 
-    private let capture = DisplayCapture()
-    private var encoder: VideoEncoder?
     private let server = HostServer()
     private var cursorStreamer: CursorStreamer?
     private let inputController = InputModeController()
@@ -55,21 +95,35 @@ final class HostController: ObservableObject {
     nonisolated(unsafe) private var dumpHandle: FileHandle?
     nonisolated private let dumpLock = NSLock()
 
+    /// Streaming starts on launch (turn off with `defaults write dev.desktopar.host autoStart -bool false`).
+    init() {
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if UserDefaults.standard.object(forKey: "autoStart") as? Bool ?? true { await self?.start() }
+        }
+    }
+
     func refreshPermissions() { permissions = PermissionStatus.current() }
+
+    private func hud(_ text: String) { server.send(.hud(HUD(text: text))) }
+
+    private func attach(_ stream: PanelStream) {
+        let sid = stream.streamId
+        stream.onFrame = { [weak self] f in
+            guard let self else { return }
+            self.server.sendVideo(streamId: sid, frame: f)
+            if sid == 0 { self.dump(f) }
+        }
+        registry.set(stream)
+    }
 
     func start() async {
         refreshPermissions()
         if !permissions.screenRecording { _ = CGRequestScreenCaptureAccess(); lastError = "Screen Recording izni gerekli"; return }
         do {
             let id = CGMainDisplayID()
-            let w = 1920, h = 1200
-            let enc = VideoEncoder(width: w, height: h)
-            try enc.start()
-            enc.onFrame = { [weak self] f in
-                guard let self else { return }
-                self.server.sendVideo(streamId: 0, frame: f)
-                self.dump(f)
-            }
+            let mirror = PanelStream(streamId: 0, displayID: id, width: 1920, height: 1200)
+            attach(mirror)
             server.onConnectionChange = { [weak self] up in
                 Task { @MainActor in
                     self?.phoneConnected = up
@@ -77,33 +131,20 @@ final class HostController: ObservableObject {
                     if !up { self?.inputController.forceScreen() }   // never leave the Mac in layout mode without a headset
                 }
             }
-            server.onNeedKeyframe = { [weak enc] _ in enc?.requestKeyframe() }
-            server.onMessage = { [weak self] msg in
-                switch msg {
-                case .addDisplay, .removeDisplay, .rotate: self?.server.send(.hud(HUD(text: "Bu özellik F5'te geliyor")))
-                default: break
-                }
-                if case .enterScreen(let e) = msg { self?.inputController.enterScreen(u: e.u, v: e.v) }
-                if case .panelUpdate(let u) = msg { Task { @MainActor in self?.applyPhonePanelWidth(u.widthM) } }
-                if case .hello = msg { Task { @MainActor in
-                    guard let self else { return }
-                    self.server.send(.calibration(self.calibration))
-                    self.sendScene()
-                    self.server.send(.mode(ModeMessage(passthrough: self.passthrough)))
-                    self.cursorStreamer?.resend()
-                } }
-            }
+            server.onNeedKeyframe = { [weak self] sid in self?.registry.get(sid)?.requestKeyframe() }
+            server.onMessage = { [weak self] msg in Task { @MainActor in self?.handle(msg) } }
             try server.start()
-            capture.onFrame = { [weak enc] pb in enc?.encode(pb) }
-            try await capture.start(displayID: id, width: w, height: h)
-            encoder = enc
-            let cs = CursorStreamer(displayID: id) { [weak self] m in self?.server.send(m) }
+            try await mirror.start()
+            panels = [PanelModel(id: "desktop-1", kind: .mirror, streamId: 0, desktopIndex: 1, widthM: panelWidthM, aspect: 1.6, displayID: id)]
+            let cs = CursorStreamer(displays: { [weak self] in
+                MainActor.assumeIsolated { (self?.panels ?? []).map { ($0.id, $0.displayID) } }
+            }, send: { [weak self] m in self?.server.send(m) })
             cs.start(); cursorStreamer = cs
             inputController.send = { [weak self] m in self?.server.send(m) }
             inputController.onModeChange = { [weak self] m in Task { @MainActor in self?.inputMode = m } }
             inputController.style = exitKeyStyle
             if !inputController.start() { lastError = "Esc/düzen modu için Accessibility + Input Monitoring izni gerekli" }
-            codecName = enc.isHEVC ? "HEVC" : "H.264"
+            codecName = mirror.isHEVC ? "HEVC" : "H.264"
             streaming = true
             lastError = nil
         } catch {
@@ -112,13 +153,108 @@ final class HostController: ObservableObject {
         }
     }
 
+    private func handle(_ msg: ControlMessage) {
+        switch msg {
+        case .hello:
+            server.send(.calibration(calibration))
+            sendScene()
+            server.send(.mode(ModeMessage(passthrough: passthrough)))
+            cursorStreamer?.resend()
+            for s in registry.all() { s.requestKeyframe() }
+        case .panelUpdate(let u): applyPhoneUpdate(u)
+        case .enterScreen(let e):
+            let d = panels.first(where: { $0.id == e.panelId })?.displayID ?? CGMainDisplayID()
+            inputController.enterScreen(u: e.u, v: e.v, displayID: d)
+        case .addDisplay: Task { await addVirtual() }
+        case .removeDisplay(let r): Task { await removeVirtual(r.panelId) }
+        case .rotate(let r): Task { await rotate(r.panelId, r.orientation) }
+        default: break
+        }
+    }
+
+    // MARK: virtual displays
+
+    func addVirtual() async {
+        guard streaming else { return }
+        guard virtuals.count < maxVirtualDisplays else { hud("En fazla \(maxVirtualDisplays) sanal ekran"); return }
+        let index = (panels.map(\.desktopIndex).max() ?? 1) + 1
+        let sid = UInt8(index - 1)
+        hud("Yeni ekran oluşturuluyor…")
+        guard let vd = VirtualDisplayManager.create(name: "Shellbreak \(index)", width: 1920, height: 1080) else {
+            hud("Sanal ekran açılamadı"); lastError = "Sanal ekran oluşturulamadı"; return
+        }
+        VirtualDisplayManager.arrangeRight(vd.displayID)
+        let stream = PanelStream(streamId: sid, displayID: vd.displayID, width: 1920, height: 1080)
+        attach(stream)
+        do { try await stream.start() } catch {
+            registry.remove(sid); hud("Yayın başlatılamadı"); lastError = error.localizedDescription; return
+        }
+        let id = "desktop-\(index)"
+        virtuals[id] = vd
+        panels.append(PanelModel(id: id, kind: .virtual, streamId: Int(sid), desktopIndex: index, widthM: 1.6, aspect: 16.0 / 9.0, displayID: vd.displayID))
+        sendScene()
+        hud("Ekran \(index) eklendi")
+        showControlWindow(on: vd.displayID)
+    }
+
+    func removeVirtual(_ id: String) async {
+        guard let p = panels.first(where: { $0.id == id }), p.kind == .virtual else { hud("Ana ekran kaldırılamaz"); return }
+        let sid = UInt8(p.streamId)
+        if let s = registry.get(sid) { await s.stop() }
+        registry.remove(sid)
+        panels.removeAll { $0.id == id }
+        virtuals[id] = nil          // dropping the last reference destroys the display; macOS moves its windows away
+        if virtuals.isEmpty { controlWindow?.close(); controlWindow = nil }
+        else if let d = virtuals.values.first?.displayID { showControlWindow(on: d) }
+        sendScene()
+        hud("Ekran \(p.desktopIndex) kaldırıldı")
+    }
+
+    private func rotate(_ id: String, _ o: PanelOrientation) async {
+        guard let i = panels.firstIndex(where: { $0.id == id }) else { return }
+        guard panels[i].kind == .virtual, let vd = virtuals[id], let s = registry.get(UInt8(panels[i].streamId)) else {
+            hud("Ana ekran döndürülemez"); return
+        }
+        let (w, h) = o == .landscape ? (1920, 1080) : (1080, 1920)
+        guard vd.setMode(width: w, height: h) else { hud("Döndürülemedi"); return }
+        do { try await s.restart(width: w, height: h) } catch { lastError = error.localizedDescription; return }
+        panels[i].orientation = o; panels[i].aspect = Double(w) / Double(h)
+        sendScene()
+        hud(o == .landscape ? "Yatay" : "Dikey")
+    }
+
+    /// The control panel as a normal window on a virtual display, so the headset can operate it with the cursor.
+    private func showControlWindow(on displayID: CGDirectDisplayID) {
+        guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == displayID }) else { return }
+        let size = NSSize(width: 420, height: min(760, screen.frame.height - 80))
+        let origin = NSPoint(x: screen.frame.midX - size.width / 2, y: screen.frame.midY - size.height / 2)
+        if controlWindow == nil {
+            let w = NSWindow(contentRect: NSRect(origin: origin, size: size), styleMask: [.titled, .resizable, .miniaturizable],
+                             backing: .buffered, defer: false)
+            w.title = "Shellbreak Kontrol"
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: ControlView(host: self, scrollable: true))
+            controlWindow = w
+        }
+        controlWindow?.setFrame(NSRect(origin: origin, size: size), display: true)
+        controlWindow?.orderFrontRegardless()
+    }
+
     func stop() async {
         inputController.stop()
         cursorStreamer?.stop(); cursorStreamer = nil
-        await capture.stop()
-        encoder?.stop(); encoder = nil
+        controlWindow?.close(); controlWindow = nil
+        for s in registry.all() { await s.stop() }
+        registry.clear()
+        virtuals.removeAll()        // destroys every virtual display
+        panels = []
         server.stop()
         streaming = false
+    }
+
+    /// Called on app termination so no ghost monitors survive.
+    func shutdownSync() {
+        controlWindow?.close(); virtuals.removeAll()
     }
 
     private func updateDump() {

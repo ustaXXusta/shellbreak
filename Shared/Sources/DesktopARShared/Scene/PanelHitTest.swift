@@ -49,7 +49,11 @@ public enum PanelHandleGeometry {
     /// Area in which the AR cursor sticks to the panel plane (panel plus handles).
     public static func hoverArea(width: Float, aspect: Float) -> LocalRect {
         let h = heightM(width: width, aspect: aspect)
-        return LocalRect(cx: 0, cy: 0.06, w: width + 0.3, h: h + 0.5)
+        var minX = -(width + 0.3) / 2, maxX = (width + 0.3) / 2
+        let minY = -(h + 0.3) / 2 - 0.1
+        var maxY = h / 2 + 0.3
+        for c in themeCircles(width: width, aspect: aspect) { minX = min(minX, c.cx - c.w / 2 - 0.05); maxX = max(maxX, c.cx + c.w / 2 + 0.05); maxY = max(maxY, c.cy + c.h / 2 + 0.05) }
+        return LocalRect(cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, w: maxX - minX, h: maxY - minY)
     }
 
     /// Corner wins over everything, then buttons, move bar (with 0.01 m slack), content.

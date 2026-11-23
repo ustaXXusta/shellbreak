@@ -27,8 +27,8 @@ final class InputModeController: @unchecked Sendable {
     private var flushTimer: DispatchSourceTimer?
 
     /// Click inside a panel: put the macOS cursor at the clicked point and leave layout mode.
-    func enterScreen(u: Double, v: Double) {
-        let b = CGDisplayBounds(CGMainDisplayID())
+    func enterScreen(u: Double, v: Double, displayID: CGDirectDisplayID = CGMainDisplayID()) {
+        let b = CGDisplayBounds(displayID)
         CGWarpMouseCursorPosition(CGPoint(x: b.minX + max(0, min(1, u)) * (b.width - 1), y: b.minY + max(0, min(1, v)) * (b.height - 1)))
         forceScreen()
     }

@@ -15,9 +15,8 @@ final class DisplayCapture: NSObject, SCStreamOutput, SCStreamDelegate, @uncheck
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw NSError(domain: "DisplayCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Display \(displayID) not found"])
         }
-        let ownPID = ProcessInfo.processInfo.processIdentifier
-        let own = content.windows.filter { $0.owningApplication?.processID == ownPID }
-        let filter = SCContentFilter(display: display, excludingWindows: own)
+        // Own windows stay in the capture: the control panel is meant to be usable from the virtual display.
+        let filter = SCContentFilter(display: display, excludingWindows: [])
         let cfg = SCStreamConfiguration()
         cfg.width = width
         cfg.height = height

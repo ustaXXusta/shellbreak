@@ -31,46 +31,88 @@ final class CursorOverlay: @unchecked Sendable {
         return try? loader?.newTexture(data: data, options: [.SRGB: false])
     }()
 
-    struct Handles { var bar, corner, rotate, add, close, dark, theme: MTLTexture; var circles: [MTLTexture] }
-    /// Flat handle sprites drawn around a hovered panel in layout mode.
+    /// Glass-style handle sprites ("bar", "corner", "rotate", "add", "close", "dark", "theme", "c0"…"c8"), each with a ".hot" variant.
+    struct Handles {
+        var tex: [String: MTLTexture]
+        func get(_ key: String, hot: Bool) -> MTLTexture? { tex[hot ? key + ".hot" : key] }
+    }
     private(set) lazy var handles: Handles? = {
-        func glyph(_ text: String, size: CGSize, bg: UIColor) -> MTLTexture? {
-            let img = UIGraphicsImageRenderer(size: size).image { _ in
-                bg.setFill()
-                UIBezierPath(roundedRect: CGRect(origin: .zero, size: size), cornerRadius: min(size.width, size.height) / 2.5).fill()
-                guard !text.isEmpty else { return }
-                let font = UIFont.systemFont(ofSize: size.height * 0.7, weight: .bold)
-                let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.white]
-                let t = text as NSString, ts = t.size(withAttributes: attrs)
-                t.draw(at: CGPoint(x: (size.width - ts.width) / 2, y: (size.height - ts.height) / 2), withAttributes: attrs)
+        guard let loader else { return nil }
+        var out: [String: MTLTexture] = [:]
+        func put(_ key: String, _ build: (Bool) -> UIImage) {
+            for hot in [false, true] {
+                guard let d = build(hot).pngData(), let t = try? loader.newTexture(data: d, options: [.SRGB: false]) else { continue }
+                out[hot ? key + ".hot" : key] = t
             }
-            guard let d = img.pngData() else { return nil }
-            return try? loader?.newTexture(data: d, options: [.SRGB: false])
         }
-        let sq = CGSize(width: 96, height: 96)
-        guard let bar = glyph("", size: CGSize(width: 320, height: 48), bg: UIColor(white: 0.9, alpha: 0.85)),
-              let corner = glyph("⤡", size: sq, bg: UIColor(red: 0.2, green: 0.5, blue: 1, alpha: 0.9)),
-              let rot = glyph("↻", size: sq, bg: UIColor(white: 0.25, alpha: 0.9)),
-              let add = glyph("+", size: sq, bg: UIColor(red: 0.15, green: 0.6, blue: 0.3, alpha: 0.9)),
-              let close = glyph("×", size: sq, bg: UIColor(red: 0.75, green: 0.2, blue: 0.2, alpha: 0.9)) else { return nil }
-        guard let dark = glyph("🌙", size: sq, bg: UIColor(white: 0.12, alpha: 0.92)),
-              let theme = glyph("🎨", size: sq, bg: UIColor(white: 0.25, alpha: 0.92)) else { return nil }
-        let colors: [UIColor] = [.black, UIColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1), UIColor(red: 1, green: 0.25, blue: 0.65, alpha: 1),
-                                 UIColor(red: 0.3, green: 0.42, blue: 0.6, alpha: 1), UIColor(red: 1, green: 0.8, blue: 0.1, alpha: 1),
-                                 UIColor(red: 0.0, green: 0.8, blue: 0.2, alpha: 1), UIColor(red: 0.1, green: 0.9, blue: 1, alpha: 1),
-                                 UIColor(red: 0.72, green: 0.45, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1)]
-        let circles: [MTLTexture] = colors.compactMap { c in
-            let sz = CGSize(width: 96, height: 96)
-            let img = UIGraphicsImageRenderer(size: sz).image { _ in
-                UIColor.white.setFill(); UIBezierPath(ovalIn: CGRect(origin: .zero, size: sz)).fill()
-                c.setFill(); UIBezierPath(ovalIn: CGRect(x: 8, y: 8, width: 80, height: 80)).fill()
-            }
-            guard let d = img.pngData() else { return nil }
-            return try? loader?.newTexture(data: d, options: [.SRGB: false])
-        }
-        guard circles.count == colors.count else { return nil }
-        return Handles(bar: bar, corner: corner, rotate: rot, add: add, close: close, dark: dark, theme: theme, circles: circles)
+        let sq = CGSize(width: 160, height: 160)
+        put("bar") { Self.glass(size: CGSize(width: 480, height: 72), symbol: nil, hot: $0, radiusFactor: 0.5, grabber: true) }
+        put("corner") { Self.glass(size: sq, symbol: "arrow.up.left.and.arrow.down.right", hot: $0) }
+        put("rotate") { Self.glass(size: sq, symbol: "rotate.right", hot: $0) }
+        put("add") { Self.glass(size: sq, symbol: "plus", hot: $0) }
+        put("close") { Self.glass(size: sq, symbol: "xmark", hot: $0) }
+        put("dark") { Self.glass(size: sq, symbol: "moon.fill", hot: $0) }
+        put("theme") { Self.glass(size: sq, symbol: "paintpalette.fill", hot: $0) }
+        let colors: [UIColor?] = [nil, UIColor(red: 0.95, green: 0.15, blue: 0.1, alpha: 1), UIColor(red: 1, green: 0.25, blue: 0.65, alpha: 1),
+                                  UIColor(red: 0.35, green: 0.5, blue: 0.75, alpha: 1), UIColor(red: 1, green: 0.8, blue: 0.1, alpha: 1),
+                                  UIColor(red: 0.0, green: 0.85, blue: 0.25, alpha: 1), UIColor(red: 0.1, green: 0.9, blue: 1, alpha: 1),
+                                  UIColor(red: 0.78, green: 0.5, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1)]
+        for (i, c) in colors.enumerated() { put("c\(i)") { Self.glassDot(size: sq, color: c, hot: $0) } }
+        return out.count >= 2 * (7 + colors.count) ? Handles(tex: out) : nil
     }()
+
+    private static func glass(size: CGSize, symbol: String?, hot: Bool, radiusFactor: CGFloat = 0.34, grabber: Bool = false) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { r in
+            let c = r.cgContext
+            let rect = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
+            let path = UIBezierPath(roundedRect: rect, cornerRadius: min(rect.width, rect.height) * radiusFactor)
+            c.saveGState()
+            c.setShadow(offset: CGSize(width: 0, height: 3), blur: 8, color: UIColor(white: 0, alpha: 0.45).cgColor)
+            UIColor(red: 0.12, green: 0.13, blue: 0.17, alpha: hot ? 0.82 : 0.62).setFill(); path.fill()
+            c.restoreGState()
+            c.saveGState(); path.addClip()
+            let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                               colors: [UIColor(white: 1, alpha: hot ? 0.42 : 0.30).cgColor, UIColor(white: 1, alpha: 0.03).cgColor] as CFArray, locations: [0, 1])!
+            c.drawLinearGradient(g, start: CGPoint(x: 0, y: rect.minY), end: CGPoint(x: 0, y: rect.maxY), options: [])
+            c.restoreGState()
+            UIColor(white: 1, alpha: hot ? 0.95 : 0.5).setStroke(); path.lineWidth = hot ? 3 : 2; path.stroke()
+            let hl = UIBezierPath(roundedRect: rect.insetBy(dx: rect.width * 0.12, dy: 3).applying(.identity), cornerRadius: rect.height * 0.2)
+            UIColor(white: 1, alpha: 0.0).setStroke(); hl.stroke()
+            if grabber {
+                let gw = rect.width * 0.28, gh: CGFloat = 8
+                UIColor(white: 1, alpha: hot ? 0.95 : 0.7).setFill()
+                UIBezierPath(roundedRect: CGRect(x: rect.midX - gw / 2, y: rect.midY - gh / 2, width: gw, height: gh), cornerRadius: gh / 2).fill()
+            }
+            if let symbol, let img = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: size.height * 0.42, weight: .semibold))?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                c.setShadow(offset: CGSize(width: 0, height: 2), blur: 4, color: UIColor(white: 0, alpha: 0.5).cgColor)
+                img.draw(at: CGPoint(x: (size.width - img.size.width) / 2, y: (size.height - img.size.height) / 2))
+            }
+        }
+    }
+
+    private static func glassDot(size: CGSize, color: UIColor?, hot: Bool) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { r in
+            let c = r.cgContext
+            let rect = CGRect(origin: .zero, size: size).insetBy(dx: 10, dy: 10)
+            c.saveGState()
+            c.setShadow(offset: CGSize(width: 0, height: 3), blur: 8, color: UIColor(white: 0, alpha: 0.5).cgColor)
+            (color ?? UIColor(white: 0.04, alpha: 1)).setFill(); UIBezierPath(ovalIn: rect).fill()
+            c.restoreGState()
+            c.saveGState(); UIBezierPath(ovalIn: rect).addClip()
+            let g = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                               colors: [UIColor(white: 1, alpha: 0.55).cgColor, UIColor(white: 1, alpha: 0.0).cgColor, UIColor(white: 0, alpha: 0.25).cgColor] as CFArray,
+                               locations: [0, 0.55, 1])!
+            c.drawLinearGradient(g, start: CGPoint(x: 0, y: rect.minY), end: CGPoint(x: 0, y: rect.maxY), options: [])
+            c.restoreGState()
+            UIColor(white: 1, alpha: hot ? 1 : 0.7).setStroke()
+            let ring = UIBezierPath(ovalIn: rect); ring.lineWidth = hot ? 7 : 3.5; ring.stroke()
+            if color == nil, let img = UIImage(systemName: "circle.slash", withConfiguration: UIImage.SymbolConfiguration(pointSize: size.height * 0.34, weight: .semibold))?
+                .withTintColor(.white, renderingMode: .alwaysOriginal) {
+                img.draw(at: CGPoint(x: (size.width - img.size.width) / 2, y: (size.height - img.size.height) / 2))
+            }
+        }
+    }
 
     var snapshot: Snapshot { lock.lock(); defer { lock.unlock() }; return snap }
 

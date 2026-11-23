@@ -15,11 +15,12 @@ final class CursorStreamer {
     private var lastHash = 0
     private var imageId = 0
     private var tick = 0
-    private let panelId: String
-    private let displayID: CGDirectDisplayID
+    /// Current panel → display mapping (first entry is the mirror).
+    private let displays: () -> [(panelId: String, displayID: CGDirectDisplayID)]
+    private var lastPanelId = "desktop-1"
 
-    init(panelId: String = "desktop-1", displayID: CGDirectDisplayID, send: @escaping (ControlMessage) -> Void) {
-        self.panelId = panelId; self.displayID = displayID; self.send = send
+    init(displays: @escaping () -> [(panelId: String, displayID: CGDirectDisplayID)], send: @escaping (ControlMessage) -> Void) {
+        self.displays = displays; self.send = send
     }
 
     func start() {
@@ -41,10 +42,13 @@ final class CursorStreamer {
         tick += 1
         if tick % 12 == 1 { refreshImage() }
         guard let loc = CGEvent(source: nil)?.location else { return }
-        let b = CGDisplayBounds(displayID)
-        let inside = b.contains(loc)
+        let list = displays()
+        let hit = list.first { CGDisplayBounds($0.displayID).contains(loc) }
+        let inside = hit != nil
+        if let hit { lastPanelId = hit.panelId }
+        let b = CGDisplayBounds((hit ?? list.first(where: { $0.panelId == lastPanelId }) ?? list.first)?.displayID ?? CGMainDisplayID())
         let u = min(max((loc.x - b.minX) / b.width, 0), 1), v = min(max((loc.y - b.minY) / b.height, 0), 1)
-        let s = CursorState(panelId: panelId, u: u, v: v, visible: inside, imageId: imageId)
+        let s = CursorState(panelId: lastPanelId, u: u, v: v, visible: inside, imageId: imageId)
         if s != lastState { lastState = s; send(.cursor(s)) }
     }
 
@@ -57,7 +61,7 @@ final class CursorStreamer {
         let img = CursorImage(imageId: imageId, pngBase64: png.base64EncodedString(),
                               hotspotX: c.hotSpot.x, hotspotY: c.hotSpot.y,
                               widthPt: c.image.size.width, heightPt: c.image.size.height,
-                              displayWidthPt: CGDisplayBounds(displayID).width)
+                              displayWidthPt: CGDisplayBounds(CGMainDisplayID()).width)
         lastImage = img
         send(.cursorImage(img))
     }
