@@ -14,7 +14,7 @@ Legend: **[S]** Shared · **[M]** MacHost · **[P]** PhoneClient · **[U]** need
 - [ ] [U] Try DeskPad: how many virtual displays the M1 opens without problems
 
 **F1 · Mac streamer**
-- [ ] [S] Video header, stream parser, Annex-B helpers, control messages, clock sync (+ tests)
+- [x] [S] Video header, stream parser, Annex-B helpers, control messages, clock sync (+ tests)
 - [ ] [M] Menu-bar app + permission checklist
 - [ ] [M] `DisplayCapture` of the built-in display, 60 fps, `showsCursor = false`
 - [ ] [M] `VideoEncoder`: HEVC low-latency, H.264 fallback, Annex-B with inline parameter sets
