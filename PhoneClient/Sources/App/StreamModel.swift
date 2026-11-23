@@ -12,6 +12,7 @@ final class StreamModel: ObservableObject {
 
     let connection = HostConnection()
     let settings = StereoSettings()
+    let cursor = CursorOverlay()
     @Published var stereo = true
     let decoder = VideoDecoder()
     private var lastIDR = Date.distantPast
@@ -32,6 +33,8 @@ final class StreamModel: ObservableObject {
         connection.onMessage = { [weak self] msg in
             switch msg {
             case .calibration(let c): self?.settings.calibration = c
+            case .cursor(let c): self?.cursor.update(c)
+            case .cursorImage(let i): self?.cursor.update(i)
             case .hud(let h) where h.text == "!recenter": self?.settings.requestRecenter()
             default: break
             }

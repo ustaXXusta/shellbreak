@@ -13,6 +13,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var cache: CVMetalTextureCache?
     private let decoder: VideoDecoder
     private let settings: StereoSettings
+    private let cursor: CursorOverlay
+    private let spritePipeline: MTLRenderPipelineState
     private let head = HeadPose()
     private var eyeTextures: [MTLTexture] = []
     private var eyeSize = (width: 0, height: 0)
@@ -22,9 +24,9 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private let panelDistanceM: Float = 1.4
     private let screenMm = LensMath.iPhone13ProScreenMm
 
-    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings) {
+    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings, cursor: CursorOverlay) {
         guard let dev = MTLCreateSystemDefaultDevice(), let q = dev.makeCommandQueue(), let lib = dev.makeDefaultLibrary() else { return nil }
-        device = dev; queue = q; self.decoder = decoder; self.settings = settings
+        device = dev; queue = q; self.decoder = decoder; self.settings = settings; self.cursor = cursor
         func pipe(_ v: String, _ f: String, _ fmt: MTLPixelFormat) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = lib.makeFunction(name: v); d.fragmentFunction = lib.makeFunction(name: f)
@@ -34,6 +36,14 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         guard let a = pipe("panelVertex", "quadFragment", .bgra8Unorm),
               let b = pipe("quadVertex", "testFragment", .bgra8Unorm),
               let c = pipe("quadVertex", "distortFragment", view.colorPixelFormat) else { return nil }
+        let sd = MTLRenderPipelineDescriptor()
+        sd.vertexFunction = lib.makeFunction(name: "panelVertex"); sd.fragmentFunction = lib.makeFunction(name: "spriteFragment")
+        let ca = sd.colorAttachments[0]!
+        ca.pixelFormat = .bgra8Unorm; ca.isBlendingEnabled = true
+        ca.sourceRGBBlendFactor = .one; ca.destinationRGBBlendFactor = .oneMinusSourceAlpha
+        ca.sourceAlphaBlendFactor = .one; ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        guard let sp = try? dev.makeRenderPipelineState(descriptor: sd) else { return nil }
+        spritePipeline = sp
         panelPipeline = a; testPipeline = b; distortPipeline = c
         CVMetalTextureCacheCreate(nil, nil, dev, nil, &cache)
         super.init()
@@ -100,11 +110,24 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 var model = simd_float4x4(1)
                 model.columns.3 = SIMD4(0, 0, -panelDistanceM, 1)
                 struct U { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
-                var u = U(mvp: proj.floatMatrix * shift * v4 * model, halfSize: SIMD2(panelWidthM / 2, panelWidthM / 2 / aspect))
+                var u = U(mvp: proj * shift * v4 * model, halfSize: SIMD2(panelWidthM / 2, panelWidthM / 2 / aspect))
                 enc.setRenderPipelineState(panelPipeline)
                 enc.setVertexBytes(&u, length: MemoryLayout<U>.size, index: 0)
                 enc.setFragmentTexture(tex, index: 0)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                let c = cursor.snapshot
+                if c.visible, let ct = c.texture {
+                    let r = CursorLayout.spriteRect(u: c.u, v: c.v, hotspot: c.hotspot, sizePt: c.sizePt,
+                                                    displayWidthPt: c.displayWidthPt, aspect: Double(aspect), scale: 1.5)
+                    let ph = panelWidthM / aspect
+                    var cm = model
+                    cm.columns.3 = SIMD4(Float(r.center.x - 0.5) * panelWidthM, Float(0.5 - r.center.y) * ph, -panelDistanceM + 0.004, 1)
+                    var cu = U(mvp: proj * shift * v4 * cm, halfSize: SIMD2(Float(r.size.x) * panelWidthM / 2, Float(r.size.y) * ph / 2))
+                    enc.setRenderPipelineState(spritePipeline)
+                    enc.setVertexBytes(&cu, length: MemoryLayout<U>.size, index: 0)
+                    enc.setFragmentTexture(ct, index: 0)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                }
             }
             enc.endEncoding()
         }
@@ -132,5 +155,3 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         cb.commit()
     }
 }
-
-private extension simd_float4x4 { var floatMatrix: simd_float4x4 { self } }

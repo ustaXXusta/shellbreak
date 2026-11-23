@@ -70,3 +70,19 @@ fragment float4 distortFragment(VOut in [[stage_in]], texture2d<float> eyeTex [[
     }
     return float4(saturate(col), 1);
 }
+
+// ---------------------------------------------------------------- cursor sprite
+
+struct SpriteUniforms { float2 center; float2 halfSize; };
+
+vertex VOut spriteVertex(uint vid [[vertex_id]], constant SpriteUniforms &u [[buffer(0)]]) {
+    const float2 p[4] = { float2(-1, -1), float2(1, -1), float2(-1, 1), float2(1, 1) };
+    const float2 t[4] = { float2(0, 1), float2(1, 1), float2(0, 0), float2(1, 0) };
+    VOut o; o.pos = float4(u.center + p[vid] * u.halfSize, 0, 1); o.uv = t[vid]; return o;
+}
+
+fragment float4 spriteFragment(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float4 c = tex.sample(s, in.uv);
+    return float4(c.rgb * c.a, c.a);   // premultiplied output, blend one / oneMinusSrcAlpha
+}

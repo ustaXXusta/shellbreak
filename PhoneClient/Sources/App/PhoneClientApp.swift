@@ -9,7 +9,7 @@ struct PhoneClientApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .topLeading) {
-                MetalVideoView(decoder: model.decoder, settings: model.settings, stereo: model.stereo).ignoresSafeArea()
+                MetalVideoView(decoder: model.decoder, settings: model.settings, cursor: model.cursor, stereo: model.stereo).ignoresSafeArea()
                 if !model.stereo { VStack(alignment: .leading, spacing: 2) {
                     Text(model.status)
                     Text(String(format: "%.0f ms · %.0f fps · %@", model.latencyMs, model.fps, model.codec))
@@ -35,6 +35,7 @@ struct PhoneClientApp: App {
 struct MetalVideoView: UIViewRepresentable {
     let decoder: VideoDecoder
     let settings: StereoSettings
+    let cursor: CursorOverlay
     let stereo: Bool
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -43,8 +44,8 @@ struct MetalVideoView: UIViewRepresentable {
     func makeUIView(context: Context) -> MTKView {
         let v = MTKView()
         v.colorPixelFormat = .bgra8Unorm
-        context.coordinator.flat = FlatRenderer(view: v, decoder: decoder)
-        context.coordinator.stereo = StereoRenderer(view: v, decoder: decoder, settings: settings)
+        context.coordinator.flat = FlatRenderer(view: v, decoder: decoder, cursor: cursor)
+        context.coordinator.stereo = StereoRenderer(view: v, decoder: decoder, settings: settings, cursor: cursor)
         v.delegate = stereo ? context.coordinator.stereo : context.coordinator.flat
         return v
     }

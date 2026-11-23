@@ -93,9 +93,12 @@ public struct CursorState: Codable, Equatable {
 public struct CursorImage: Codable, Equatable {
     public var imageId: Int; public var pngBase64: String
     public var hotspotX: Double; public var hotspotY: Double; public var widthPt: Double; public var heightPt: Double
-    public init(imageId: Int, pngBase64: String, hotspotX: Double, hotspotY: Double, widthPt: Double, heightPt: Double) {
+    /// Width of the captured display in points; lets the phone size the cursor relative to the panel (optional on the wire).
+    public var displayWidthPt: Double?
+    public init(imageId: Int, pngBase64: String, hotspotX: Double, hotspotY: Double, widthPt: Double, heightPt: Double,
+                displayWidthPt: Double? = nil) {
         self.imageId = imageId; self.pngBase64 = pngBase64; self.hotspotX = hotspotX
-        self.hotspotY = hotspotY; self.widthPt = widthPt; self.heightPt = heightPt
+        self.hotspotY = hotspotY; self.widthPt = widthPt; self.heightPt = heightPt; self.displayWidthPt = displayWidthPt
     }
 }
 public struct GazeFocus: Codable, Equatable { public var panelId: String; public init(panelId: String) { self.panelId = panelId } }

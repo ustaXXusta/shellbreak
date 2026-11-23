@@ -32,6 +32,7 @@ final class HostController: ObservableObject {
     private let capture = DisplayCapture()
     private var encoder: VideoEncoder?
     private let server = HostServer()
+    private var cursorStreamer: CursorStreamer?
     nonisolated(unsafe) private var dumpHandle: FileHandle?
     nonisolated private let dumpLock = NSLock()
 
@@ -56,12 +57,15 @@ final class HostController: ObservableObject {
                 if case .hello = msg { Task { @MainActor in
                     guard let self else { return }
                     self.server.send(.calibration(self.calibration))
+                    self.cursorStreamer?.resend()
                 } }
             }
             try server.start()
             capture.onFrame = { [weak enc] pb in enc?.encode(pb) }
             try await capture.start(displayID: id, width: w, height: h)
             encoder = enc
+            let cs = CursorStreamer(displayID: id) { [weak self] m in self?.server.send(m) }
+            cs.start(); cursorStreamer = cs
             codecName = enc.isHEVC ? "HEVC" : "H.264"
             streaming = true
             lastError = nil
@@ -72,6 +76,7 @@ final class HostController: ObservableObject {
     }
 
     func stop() async {
+        cursorStreamer?.stop(); cursorStreamer = nil
         await capture.stop()
         encoder?.stop(); encoder = nil
         server.stop()
