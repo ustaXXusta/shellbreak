@@ -23,3 +23,10 @@ public struct ClockSync {
         Double(nowUs - (Int64(captureTimeUs) - offsetUs)) / 1000
     }
 }
+
+extension ClockSync {
+    /// Static variant for callers holding only the offset.
+    public static func ageMs(captureTimeUs: UInt64, nowUs: Int64, offsetUs: Int64) -> Double {
+        Double(nowUs - (Int64(captureTimeUs) - offsetUs)) / 1000
+    }
+}
