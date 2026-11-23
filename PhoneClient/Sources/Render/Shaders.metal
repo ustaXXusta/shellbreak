@@ -240,6 +240,24 @@ static float3 fogColor(int th) {
 static float fogK(int th) {
     switch (th) { case 3: return 0.04; case 4: return 0.012; case 6: return 0.032; case 7: return 0.028; default: return 0.012; }
 }
+// Fog after Inigo Quilez, "better fog" (iquilezles.org/articles/fog, snippets MIT): the fog is tinted toward the sun when looking
+// at it, and denser close to the ground (exponential height falloff).
+static float3 sunDirFor(int th) {
+    switch (th) { case 3: return normalize(float3(0.1, 0.25, -1.0)); case 4: return normalize(float3(0.45, 0.7, -0.55));
+                  case 6: return normalize(float3(0.6, 0.3, -0.7)); case 7: return normalize(float3(0.0, 0.2, -1.0)); default: return normalize(float3(-0.35, 0.75, -0.55)); }
+}
+static float3 sunTintFor(int th) {
+    switch (th) { case 3: return float3(0.9, 0.6, 0.35); case 4: return float3(1.0, 0.9, 0.7); case 6: return float3(1.0, 0.3, 0.8);
+                  case 7: return float3(1.0, 0.7, 0.35); default: return float3(1.0, 0.95, 0.7); }
+}
+static float3 fogApply(float3 col, float dist, float3 rd, int th) {
+    float h = max(rd.y * dist - GY, 0.0);                       // height of the point above the ground
+    float density = fogK(th) * (1.0 + 0.9 * exp(-h * 0.35));    // thicker near the ground
+    float amount = 1.0 - exp(-dist * density);
+    float sunAmount = pow(max(dot(rd, sunDirFor(th)), 0.0), 8.0);
+    return mix(col, mix(fogColor(th), sunTintFor(th), sunAmount * 0.8), amount);
+}
+
 static float cellW(int th) { switch (th) { case 3: return 6.0; case 4: return 5.0; case 6: return 7.0; case 7: return 6.5; default: return 8.0; } }
 static float bHeight(float u, float side, int layer, int th) {
     float cw = cellW(th); float c = floor(u / cw) + side * 31.0 + float(layer) * 17.0;
@@ -533,7 +551,7 @@ static float3 streetBackdrop(float3 d, float t, int th, texture2d<float> atlas, 
             if (tt <= 0) continue;
             float3 P = d * tt; float v = P.y - GY;
             if (v > 0 && v < bHeight(P.z, side, layer, th)) {
-                col = mix(fog, facadeCol(P.z, v, side, layer, t, th, tt, atlas), exp(-tt * fogK(th)));
+                col = fogApply(facadeCol(P.z, v, side, layer, t, th, tt, atlas), tt, d, th);
                 tHit = tt; break;
             }
         }
@@ -613,7 +631,7 @@ static float3 groundStreet(float3 P, float3 d, float t, int th, float tg, textur
         break;
     }
     }
-    return mix(fog, col, exp(-tg * fogK(th)));
+    return fogApply(col, tg, d, th);
 }
 
 // Ray against a vertical cylinder (axis through (cx, cz)); returns t or -1 when the hit height is outside [y0, y1].
@@ -719,7 +737,7 @@ static float3 streetProps(float3 d, float t, int th, float3 col, thread float &t
             default: cc = mix(float3(0.95, 0.9, 0.7), float3(0.25, 0.6, 0.35), step(0.5, h11(fp * 7.0))); break;
             }
             if (q.y > 1.5) cc = float3(0.85, 0.65, 0.5) * 0.6;
-            col = mix(fog, cc, exp(-tt * fogK(th))); tb = tt;
+            col = fogApply(cc, tt, d, th); tb = tt;
         }
     }
     // café awning above us (right side), scalloped edge, per-theme colours
@@ -742,7 +760,7 @@ static float3 streetProps(float3 d, float t, int th, float3 col, thread float &t
                     }
                     ac *= 0.5 + 0.5 * smoothstep(-3.0, 0.0, P.z);
                     if (th == 3) ac += float3(0.5, 0.6, 0.8) * step(0.97, h21(floor(P.xz * 12.0))) * 0.4;   // drips
-                    col = mix(fog, ac, exp(-tt * fogK(th))); tb = tt;
+                    col = fogApply(ac, tt, d, th); tb = tt;
                 }
             }
         }
@@ -759,7 +777,7 @@ static float3 streetProps(float3 d, float t, int th, float3 col, thread float &t
             float fl = step(abs(P.x), XN) * step(-0.4, fy) * step(fy, 0.0) * step(abs(fract(P.x * 2.0) - 0.5) , 0.5 - (-fy) * 1.2);
             if (fl > 0.5) {
                 float3 cc = h21(floor(float2(P.x * 2.0, float(k)))) > 0.5 ? float3(1.0, 0.8, 0.2) : (h21(floor(float2(P.x * 2.0, float(k))) + 4.0) > 0.5 ? float3(0.9, 0.3, 0.4) : float3(0.3, 0.7, 0.9));
-                col = mix(fog, cc, exp(-tt * fogK(th))); tb = tt;
+                col = fogApply(cc, tt, d, th); tb = tt;
             }
         }
     }
@@ -803,5 +821,12 @@ fragment float4 themeFragment(VOut in [[stage_in]], constant ThemeParams &u [[bu
     float2 n = float2(in.uv.x * 2 - 1, 1 - in.uv.y * 2);
     float3 ray = normalize(float3(n.x * u.tanY * u.aspect, n.y * u.tanY, -1));
     float3 d = normalize(u.right * ray.x + u.up * ray.y + u.back * ray.z);
-    return float4(themeColor(d, u.time, u.theme, atlas), 1);
+    float3 c = themeColor(d, u.time, u.theme, atlas);
+    if (u.theme != 1 && u.theme != 2 && u.theme != 5) {
+        // Filmic shoulder so lamps/neon roll off instead of clipping, plus a gentle vignette.
+        float3 x = max(c, 0.0);
+        c = select(0.7 + 0.3 * (1.0 - exp(-(x - 0.7) / 0.3)), x, x < 0.7);
+        c *= 1.0 - 0.28 * pow(saturate(length(n) * 0.75), 2.6);
+    }
+    return float4(saturate(c), 1);
 }
