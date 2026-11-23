@@ -8,6 +8,7 @@ final class StereoSettings: @unchecked Sendable {
     private var _stereo = true
     private var _recenter = true
     private var _passthrough = true
+    private var _commands: [LayoutCommand] = []
     private var _panelWidth: Float = 2.0
 
     var calibration: Calibration {
@@ -26,6 +27,10 @@ final class StereoSettings: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return _passthrough }
         set { lock.lock(); _passthrough = newValue; lock.unlock() }
     }
+    func enqueue(_ c: LayoutCommand) { lock.lock(); _commands.append(c); if _commands.count > 200 { _commands.removeFirst() }; lock.unlock() }
+    func takeCommands() -> [LayoutCommand] { lock.lock(); defer { lock.unlock() }; let c = _commands; _commands = []; return c }
+    /// Called after the user stops adjusting the panel (debounced).
+    var onPanelChanged: ((_ transform: [Float], _ widthM: Float) -> Void)?
     func requestRecenter() { lock.lock(); _recenter = true; lock.unlock() }
     func takeRecenter() -> Bool { lock.lock(); defer { lock.unlock() }; let r = _recenter; _recenter = false; return r }
 }

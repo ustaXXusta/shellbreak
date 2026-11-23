@@ -23,6 +23,11 @@ struct MacHostApp: App {
                 }
                 Toggle("Debug: ~/Desktop/stream.h265", isOn: $host.dumpToDesktop)
                 Divider()
+                Picker("Çıkış tuşu", selection: $host.exitKeyStyle) {
+                    Text("Esc").tag(ExitKeyStyle.singleEsc); Text("Esc Esc").tag(ExitKeyStyle.doubleEsc); Text("⌃Esc").tag(ExitKeyStyle.ctrlEsc)
+                }
+                if host.exitKeyStyle == .singleEsc { Text("Esc artık uygulamalara ulaşmaz").font(.caption).foregroundStyle(.secondary) }
+                Text(host.inputMode == .layout ? "DÜZEN MODU (Esc/Enter: ekran modu)" : "Ekran modu").font(.caption)
                 slider("Panel genişliği (m)", $host.panelWidthM, 0.5...4, "%.2f")
                 Text("Gözlük kalibrasyonu").font(.headline)
                 Toggle("Gerçek dünya (passthrough)", isOn: $host.passthrough)

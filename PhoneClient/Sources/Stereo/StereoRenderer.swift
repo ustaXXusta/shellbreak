@@ -19,15 +19,17 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private let ar: ARSessionController
     private let cameraPipeline: MTLRenderPipelineState
     private var panelWorld: simd_float4x4?
+    private let hud: HUDOverlay
+    private var changedAt: Date?
     private var eyeTextures: [MTLTexture] = []
     private var eyeSize = (width: 0, height: 0)
 
     private let panelDistanceM: Float = 1.4
     private let screenMm = LensMath.iPhone13ProScreenMm
 
-    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings, cursor: CursorOverlay, ar: ARSessionController) {
+    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings, cursor: CursorOverlay, ar: ARSessionController, hud: HUDOverlay) {
         guard let dev = MTLCreateSystemDefaultDevice(), let q = dev.makeCommandQueue(), let lib = dev.makeDefaultLibrary() else { return nil }
-        device = dev; queue = q; self.decoder = decoder; self.settings = settings; self.cursor = cursor; self.ar = ar
+        device = dev; queue = q; self.decoder = decoder; self.settings = settings; self.cursor = cursor; self.ar = ar; self.hud = hud
         func pipe(_ v: String, _ f: String, _ fmt: MTLPixelFormat) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = lib.makeFunction(name: v); d.fragmentFunction = lib.makeFunction(name: f)
@@ -100,18 +102,56 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         return (y, c, frame)
     }
 
+    /// Layout-mode keys: orbit around the head, depth, size (spec 6.6). Shift = big step.
+    private func applyCommands(camera: simd_float4x4, hasFrame: Bool) {
+        let cmds = settings.takeCommands()
+        if hasFrame, !cmds.isEmpty, var world = panelWorld {
+            let head = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
+            var center = SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z)
+            for c in cmds {
+                guard let name = LayoutCommandName(rawValue: c.command) else { continue }
+                let big: Float = c.shiftHeld ? 4 : 1
+                let a: Float = 0.04 * big, d: Float = 0.1 * big, z: Float = c.shiftHeld ? 1.2 : 1.05
+                switch name {
+                case .moveLeft: center = LayoutMath.moved(center: center, head: head, dYaw: a, dPitch: 0, dRadius: 0)
+                case .moveRight: center = LayoutMath.moved(center: center, head: head, dYaw: -a, dPitch: 0, dRadius: 0)
+                case .moveUp: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: a, dRadius: 0)
+                case .moveDown: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: -a, dRadius: 0)
+                case .closer: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: 0, dRadius: -d); hud.flash("Yakın")
+                case .farther: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: 0, dRadius: d); hud.flash("Uzak")
+                case .bigger: settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM * z); hud.flash(String(format: "Genişlik %.2f m", settings.panelWidthM))
+                case .smaller: settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM / z); hud.flash(String(format: "Genişlik %.2f m", settings.panelWidthM))
+                case .faceMe: hud.flash("Bana dön")
+                case .bringFront:
+                    world = Self.placePanel(camera: camera, distance: panelDistanceM)
+                    center = SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z); hud.flash("Önüme getir")
+                case .togglePassthrough: settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "VR modu")
+                default: break
+                }
+            }
+            panelWorld = LayoutMath.facing(center: center, head: head)
+            changedAt = Date()
+        }
+        if let t = changedAt, Date().timeIntervalSince(t) > 0.3, let w = panelWorld {
+            changedAt = nil
+            let m = (0..<4).flatMap { c in (0..<4).map { r in w[c][r] } }
+            settings.onPanelChanged?(m, settings.panelWidthM)
+        }
+    }
+
     func draw(in view: MTKView) {
         let cal = settings.calibration
         let ds = view.drawableSize
         guard ds.width > 0, let drawable = view.currentDrawable, let cb = queue.makeCommandBuffer() else { return }
         ensureEyeTextures(cal, drawable: ds)
         guard eyeTextures.count == 2 else { return }
-        let panelWidthM = settings.panelWidthM
         let frame = ar.latestFrame
         let camT = frame?.camera.transform ?? matrix_identity_float4x4
         if frame != nil, settings.takeRecenter() || panelWorld == nil {
             panelWorld = Self.placePanel(camera: camT, distance: panelDistanceM)
         }
+        applyCommands(camera: camT, hasFrame: frame != nil)
+        let panelWidthM = settings.panelWidthM
         let panelModel = panelWorld ?? { var m = matrix_identity_float4x4; m.columns.3 = SIMD4(0, 0, -panelDistanceM, 1); return m }()
         let v4 = camT.inverse                      // world -> head (camera) space, full 6DoF
         let video = videoTexture()
@@ -170,6 +210,17 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     enc.setFragmentTexture(ct, index: 0)
                     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
                 }
+            }
+            if let (ht, hasp) = hud.current() {
+                var shift = simd_float4x4(1)
+                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
+                var place = simd_float4x4(1); place.columns.3 = SIMD4(0, -0.17, -0.9, 1)
+                struct HU { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
+                var hu = HU(mvp: proj * shift * place, halfSize: SIMD2(0.07 * hasp, 0.07))
+                enc.setRenderPipelineState(spritePipeline)
+                enc.setVertexBytes(&hu, length: MemoryLayout<HU>.size, index: 0)
+                enc.setFragmentTexture(ht, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
             enc.endEncoding()
         }

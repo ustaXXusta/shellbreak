@@ -14,6 +14,7 @@ final class StreamModel: ObservableObject {
     let settings = StereoSettings()
     let cursor = CursorOverlay()
     let ar = ARSessionController()
+    let hud = HUDOverlay()
     @Published var stereo = true
     let decoder = VideoDecoder()
     private var lastIDR = Date.distantPast
@@ -39,11 +40,19 @@ final class StreamModel: ObservableObject {
             case .cursor(let c): self?.cursor.update(c)
             case .cursorImage(let i): self?.cursor.update(i)
             case .hud(let h) where h.text == "!recenter": self?.settings.requestRecenter()
+            case .hud(let h): self?.hud.flash(h.text, seconds: 2.5)
+            case .inputMode(let m):
+                if m.mode == "layout" { self?.hud.setPersistent("DÜZEN MODU · Esc: ekran modu") }
+                else { self?.hud.setPersistent(nil); self?.hud.flash("Ekran modu") }
+            case .layoutCommand(let c): self?.settings.enqueue(c)
             default: break
             }
         }
         connection.onVideoPacket = { [weak self] p in self?.handle(p) }
         decoder.onDecoded = { [weak self] captureUs in self?.decoded(captureUs) }
+        settings.onPanelChanged = { [weak self] t, w in
+            self?.connection.send(.panelUpdate(PanelUpdate(panelId: "desktop-1", transform: t, widthM: Double(w), curvature: 0)))
+        }
         ar.start()
         connection.start()
     }

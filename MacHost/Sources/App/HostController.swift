@@ -15,8 +15,12 @@ final class HostController: ObservableObject {
     @Published var lastError: String?
     @Published var panelWidthM: Double = {
         let v = UserDefaults.standard.double(forKey: "panelWidthM"); return v > 0 ? v : 2.0
-    }() { didSet { UserDefaults.standard.set(panelWidthM, forKey: "panelWidthM"); sendScene() } }
+    }() { didSet { UserDefaults.standard.set(panelWidthM, forKey: "panelWidthM"); if !suppressScene { sendScene() } } }
     private var sceneRevision = 0
+    private var suppressScene = false
+    private func applyPhonePanelWidth(_ w: Double) {
+        suppressScene = true; panelWidthM = w; suppressScene = false
+    }
     func sendScene() {
         sceneRevision += 1
         server.send(.scene(SceneMessage(revision: sceneRevision, panels: [
@@ -43,6 +47,11 @@ final class HostController: ObservableObject {
     private var encoder: VideoEncoder?
     private let server = HostServer()
     private var cursorStreamer: CursorStreamer?
+    private let inputController = InputModeController()
+    @Published var inputMode: InputModeState = .screen
+    @Published var exitKeyStyle: ExitKeyStyle = ExitKeyStyle(rawValue: UserDefaults.standard.string(forKey: "exitKeyStyle") ?? "") ?? .singleEsc {
+        didSet { UserDefaults.standard.set(exitKeyStyle.rawValue, forKey: "exitKeyStyle"); inputController.style = exitKeyStyle }
+    }
     nonisolated(unsafe) private var dumpHandle: FileHandle?
     nonisolated private let dumpLock = NSLock()
 
@@ -61,9 +70,15 @@ final class HostController: ObservableObject {
                 self.server.sendVideo(streamId: 0, frame: f)
                 self.dump(f)
             }
-            server.onConnectionChange = { [weak self] up in Task { @MainActor in self?.phoneConnected = up } }
+            server.onConnectionChange = { [weak self] up in
+                Task { @MainActor in
+                    self?.phoneConnected = up
+                    if !up { self?.inputController.forceScreen() }   // never leave the Mac in layout mode without a headset
+                }
+            }
             server.onNeedKeyframe = { [weak enc] _ in enc?.requestKeyframe() }
             server.onMessage = { [weak self] msg in
+                if case .panelUpdate(let u) = msg { Task { @MainActor in self?.applyPhonePanelWidth(u.widthM) } }
                 if case .hello = msg { Task { @MainActor in
                     guard let self else { return }
                     self.server.send(.calibration(self.calibration))
@@ -78,6 +93,10 @@ final class HostController: ObservableObject {
             encoder = enc
             let cs = CursorStreamer(displayID: id) { [weak self] m in self?.server.send(m) }
             cs.start(); cursorStreamer = cs
+            inputController.send = { [weak self] m in self?.server.send(m) }
+            inputController.onModeChange = { [weak self] m in Task { @MainActor in self?.inputMode = m } }
+            inputController.style = exitKeyStyle
+            if !inputController.start() { lastError = "Esc/düzen modu için Accessibility + Input Monitoring izni gerekli" }
             codecName = enc.isHEVC ? "HEVC" : "H.264"
             streaming = true
             lastError = nil
@@ -88,6 +107,7 @@ final class HostController: ObservableObject {
     }
 
     func stop() async {
+        inputController.stop()
         cursorStreamer?.stop(); cursorStreamer = nil
         await capture.stop()
         encoder?.stop(); encoder = nil
