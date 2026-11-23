@@ -46,10 +46,10 @@ Legend: **[S]** Shared · **[M]** MacHost · **[P]** PhoneClient · **[U]** need
 **F5 · All desktops**
 - [ ] [S] Panel/scene model, layout math (+ tests)
 - [ ] [M] `DesktopScanner` (SkyLight via `dlsym`, fail soft) + manual override
-- [ ] [M] `VirtualDisplayManager`: create, destroy, change mode; cleanup on quit and crash
+- [x] [M] `VirtualDisplayManager`: create, destroy, change mode; cleanup on quit and crash (displays die with the process)
 - [ ] [M] `WindowMover.distribute` / `restore` with `startup_scan` progress
-- [ ] [M] `DisplayArranger`: macOS display order = panel order
-- [ ] [M][P] One capture/encoder/decoder per panel, `scene`, default arc layout
+- [~] [M] `DisplayArranger`: new virtual displays are placed right of all others (reordering with panels not done)
+- [x] [M][P] One capture/encoder/decoder per panel, `scene`, default row layout (tested Mac-side with a fake phone; phone side needs device test)
 - [ ] [M] Frame-rate policy
 
 **Gate 2:** every Mission Control desktop (count read at launch) appears as a world-locked panel at 60 fps without judder; quitting restores windows to their desktops.

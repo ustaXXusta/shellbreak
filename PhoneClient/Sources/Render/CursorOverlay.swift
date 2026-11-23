@@ -5,7 +5,7 @@ import DesktopARShared
 /// Screen-mode cursor sprite state (position + image from the Mac), shared with the render thread.
 final class CursorOverlay: @unchecked Sendable {
     struct Snapshot {
-        var u = 0.5, v = 0.5, visible = false
+        var u = 0.5, v = 0.5, visible = false, panelId = "desktop-1"
         var texture: MTLTexture?
         var hotspot = SIMD2<Double>(1, 1), sizePt = SIMD2<Double>(12, 19), displayWidthPt = 1440.0
     }
@@ -117,7 +117,7 @@ final class CursorOverlay: @unchecked Sendable {
     var snapshot: Snapshot { lock.lock(); defer { lock.unlock() }; return snap }
 
     func update(_ c: CursorState) {
-        lock.lock(); snap.u = c.u; snap.v = c.v; snap.visible = c.visible; lock.unlock()
+        lock.lock(); snap.u = c.u; snap.v = c.v; snap.visible = c.visible; snap.panelId = c.panelId; lock.unlock()
     }
 
     func update(_ img: CursorImage) {

@@ -13,30 +13,26 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private let testPipeline: MTLRenderPipelineState
     private let distortPipeline: MTLRenderPipelineState
     private var cache: CVMetalTextureCache?
-    private let decoder: VideoDecoder
+    private let bank: DecoderBank
     private let settings: StereoSettings
     private let cursor: CursorOverlay
     private let spritePipeline: MTLRenderPipelineState
     private let themePipeline: MTLRenderPipelineState
     private let ar: ARSessionController
     private let cameraPipeline: MTLRenderPipelineState
-    private var panelWorld: simd_float4x4?
     private let hud: HUDOverlay
-    private var changedAt: Date?
     private var arYaw: Float = 0, arPitch: Float = 0
     private var wasLayout = false
     /// AR cursor placement for the current frame: world transform of the hand sprite, and u/v when over the panel.
-    private var handModel: simd_float4x4?
-    private var handUV: (Double, Double)?
     private var eyeTextures: [MTLTexture] = []
     private var eyeSize = (width: 0, height: 0)
 
     private let panelDistanceM: Float = 1.4
     private let screenMm = LensMath.iPhone13ProScreenMm
 
-    init?(view: MTKView, decoder: VideoDecoder, settings: StereoSettings, cursor: CursorOverlay, ar: ARSessionController, hud: HUDOverlay) {
+    init?(view: MTKView, bank: DecoderBank, settings: StereoSettings, cursor: CursorOverlay, ar: ARSessionController, hud: HUDOverlay) {
         guard let dev = MTLCreateSystemDefaultDevice(), let q = dev.makeCommandQueue(), let lib = dev.makeDefaultLibrary() else { return nil }
-        device = dev; queue = q; self.decoder = decoder; self.settings = settings; self.cursor = cursor; self.ar = ar; self.hud = hud
+        device = dev; queue = q; self.bank = bank; self.settings = settings; self.cursor = cursor; self.ar = ar; self.hud = hud
         func pipe(_ v: String, _ f: String, _ fmt: MTLPixelFormat) -> MTLRenderPipelineState? {
             let d = MTLRenderPipelineDescriptor()
             d.vertexFunction = lib.makeFunction(name: v); d.fragmentFunction = lib.makeFunction(name: f)
@@ -77,14 +73,78 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         eyeSize = t
     }
 
-    private func videoTexture() -> (MTLTexture, Float)? {
-        guard let frame = decoder.latest, let cache else { return nil }
-        let pb = frame.pixelBuffer
-        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
-        var tex: CVMetalTexture?
-        CVMetalTextureCacheCreateTextureFromImage(nil, cache, pb, nil, .bgra8Unorm, w, h, 0, &tex)
-        guard let tex, let mt = CVMetalTextureGetTexture(tex) else { return nil }
-        return (mt, Float(w) / Float(h))
+    // MARK: panels
+
+    struct PanelRT {
+        var id: String
+        var streamId: Int
+        var kind: PanelKind
+        var orientation: PanelOrientation
+        var world: simd_float4x4?
+        var width: Float
+        var aspect: Float
+        var roll: Float = 0
+        var afterId: String?
+    }
+    private var panels: [PanelRT] = []
+    private var activeIdx = 0
+    private var hoverIdx: Int?
+    private var dragIdx: Int?
+    private var pickerIdx: Int?
+    private var changed: [String: Date] = [:]
+    private var closeArm: (id: String, at: Date)?
+    private var texRefs: [CVMetalTexture] = []
+    private var handUV: (Double, Double)?
+
+    private func syncScene() {
+        guard let scene = settings.takeScene() else { return }
+        var out: [PanelRT] = []
+        for (i, info) in scene.enumerated() {
+            if var p = panels.first(where: { $0.id == info.id }) {
+                if info.orientation != p.orientation && info.kind == .virtual {
+                    p.width = LayoutMath.clampedWidth(p.width / max(p.aspect, 0.1))   // new width = old height
+                } else { p.width = LayoutMath.clampedWidth(Float(info.widthM)) }
+                p.orientation = info.orientation; p.aspect = Float(info.aspect)
+                out.append(p)
+            } else {
+                out.append(PanelRT(id: info.id, streamId: info.streamId, kind: info.kind, orientation: info.orientation, world: nil,
+                                   width: LayoutMath.clampedWidth(Float(info.widthM)), aspect: Float(info.aspect),
+                                   afterId: i > 0 ? scene[i - 1].id : nil))
+            }
+        }
+        for p in panels where !out.contains(where: { $0.id == p.id }) { bank.remove(p.streamId) }
+        let activeId = panels.indices.contains(activeIdx) ? panels[activeIdx].id : nil
+        panels = out
+        activeIdx = out.firstIndex(where: { $0.id == activeId }) ?? 0
+        hoverIdx = nil; dragIdx = nil; pickerIdx = nil
+    }
+
+    private func oriented(center: SIMD3<Float>, head: SIMD3<Float>, roll: Float) -> simd_float4x4 {
+        let f = LayoutMath.facing(center: center, head: head)
+        guard roll != 0 else { return f }
+        let c = cos(roll), s = sin(roll)
+        var r = matrix_identity_float4x4
+        r.columns.0 = SIMD4(c, s, 0, 0); r.columns.1 = SIMD4(-s, c, 0, 0)
+        return f * r
+    }
+    private func center(of m: simd_float4x4) -> SIMD3<Float> { SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z) }
+
+    /// Panels without a pose are put in a row left → right (new ones go next to the panel before them).
+    private func placePending(camera: simd_float4x4, force: Bool) {
+        let head = center(of: camera)
+        if force { for i in panels.indices { panels[i].world = nil } }
+        for i in panels.indices where panels[i].world == nil {
+            let ref = panels[i].afterId.flatMap { id in panels.first(where: { $0.id == id && $0.world != nil }) }
+                ?? (i > 0 ? panels[0..<i].last(where: { $0.world != nil }) : nil)
+            if let ref, let rw = ref.world {
+                let rc = center(of: rw), o = LayoutMath.orbit(of: rc, around: head)
+                let dYaw = -(ref.width / 2 + panels[i].width / 2 + 0.1) / max(o.radius, 0.5)
+                panels[i].world = oriented(center: LayoutMath.moved(center: rc, head: head, dYaw: dYaw, dPitch: 0, dRadius: 0), head: head, roll: 0)
+            } else {
+                panels[i].world = oriented(center: center(of: Self.placePanel(camera: camera, distance: panelDistanceM)), head: head, roll: 0)
+            }
+            changed[panels[i].id] = Date()
+        }
     }
 
     /// Panel in front of the camera at its eye height, facing the user, fixed in world space.
@@ -98,6 +158,17 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         return simd_float4x4(columns: (SIMD4(x, 0), SIMD4(up, 0), SIMD4(z, 0), SIMD4(c, 1)))
     }
 
+    private func videoTexture(_ streamId: Int) -> (MTLTexture, Float)? {
+        guard let frame = bank.existing(streamId)?.latest, let cache else { return nil }
+        let pb = frame.pixelBuffer
+        let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+        var tex: CVMetalTexture?
+        CVMetalTextureCacheCreateTextureFromImage(nil, cache, pb, nil, .bgra8Unorm, w, h, 0, &tex)
+        guard let tex, let mt = CVMetalTextureGetTexture(tex) else { return nil }
+        texRefs.append(tex)
+        return (mt, Float(w) / Float(h))
+    }
+
     private func cameraTextures(_ frame: ARFrame?) -> (MTLTexture, MTLTexture, ARFrame)? {
         guard let frame, let cache else { return nil }
         let pb = frame.capturedImage
@@ -105,175 +176,191 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             var t: CVMetalTexture?
             CVMetalTextureCacheCreateTextureFromImage(nil, cache, pb, nil, fmt, CVPixelBufferGetWidthOfPlane(pb, plane),
                                                       CVPixelBufferGetHeightOfPlane(pb, plane), plane, &t)
+            if let t { texRefs.append(t) }
             return t.flatMap { CVMetalTextureGetTexture($0) }
         }
         guard let y = tex(0, .r8Unorm), let c = tex(1, .rg8Unorm) else { return nil }
         return (y, c, frame)
     }
 
-    /// Layout-mode keys: orbit around the head, depth, size (spec 6.6). Shift = big step.
+    // MARK: keys
+
+    /// Layout-mode keys apply to the active panel: orbit around the head, depth, size (spec 6.6). Shift = big step.
     private func applyCommands(camera: simd_float4x4, hasFrame: Bool) {
         let cmds = settings.takeCommands()
-        if hasFrame, !cmds.isEmpty, var world = panelWorld {
-            let head = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
-            var center = SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z)
-            for c in cmds {
-                guard let name = LayoutCommandName(rawValue: c.command) else { continue }
-                let big: Float = c.shiftHeld ? 4 : 1
-                let a: Float = 0.04 * big, d: Float = 0.1 * big, z: Float = c.shiftHeld ? 1.2 : 1.05
-                switch name {
-                case .moveLeft: center = LayoutMath.moved(center: center, head: head, dYaw: a, dPitch: 0, dRadius: 0)
-                case .moveRight: center = LayoutMath.moved(center: center, head: head, dYaw: -a, dPitch: 0, dRadius: 0)
-                case .moveUp: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: a, dRadius: 0)
-                case .moveDown: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: -a, dRadius: 0)
-                case .closer: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: 0, dRadius: -d); hud.flash("Yakın")
-                case .farther: center = LayoutMath.moved(center: center, head: head, dYaw: 0, dPitch: 0, dRadius: d); hud.flash("Uzak")
-                case .bigger: settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM * z); hud.flash(String(format: "Genişlik %.2f m", settings.panelWidthM))
-                case .smaller: settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM / z); hud.flash(String(format: "Genişlik %.2f m", settings.panelWidthM))
-                case .faceMe: hud.flash("Bana dön")
-                case .bringFront:
-                    world = Self.placePanel(camera: camera, distance: panelDistanceM)
-                    center = SIMD3(world.columns.3.x, world.columns.3.y, world.columns.3.z); hud.flash("Önüme getir")
-                case .togglePassthrough: settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "VR modu")
-                default: break
-                }
+        guard hasFrame, !cmds.isEmpty else { return }
+        let head = center(of: camera)
+        for c in cmds {
+            guard let name = LayoutCommandName(rawValue: c.command) else { continue }
+            if name == .togglePassthrough { settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "VR modu"); continue }
+            if name == .bringFront { placePending(camera: camera, force: true); hud.flash("Önüme getir"); continue }
+            guard panels.indices.contains(activeIdx), let world = panels[activeIdx].world else { continue }
+            var ctr = center(of: world)
+            let big: Float = c.shiftHeld ? 4 : 1
+            let a: Float = 0.04 * big, d: Float = 0.1 * big, z: Float = c.shiftHeld ? 1.2 : 1.05
+            switch name {
+            case .moveLeft: ctr = LayoutMath.moved(center: ctr, head: head, dYaw: a, dPitch: 0, dRadius: 0)
+            case .moveRight: ctr = LayoutMath.moved(center: ctr, head: head, dYaw: -a, dPitch: 0, dRadius: 0)
+            case .moveUp: ctr = LayoutMath.moved(center: ctr, head: head, dYaw: 0, dPitch: a, dRadius: 0)
+            case .moveDown: ctr = LayoutMath.moved(center: ctr, head: head, dYaw: 0, dPitch: -a, dRadius: 0)
+            case .closer: ctr = LayoutMath.moved(center: ctr, head: head, dYaw: 0, dPitch: 0, dRadius: -d); hud.flash("Yakın")
+            case .farther: ctr = LayoutMath.moved(center: ctr, head: head, dYaw: 0, dPitch: 0, dRadius: d); hud.flash("Uzak")
+            case .bigger: panels[activeIdx].width = LayoutMath.clampedWidth(panels[activeIdx].width * z); hud.flash(String(format: "Genişlik %.2f m", panels[activeIdx].width))
+            case .smaller: panels[activeIdx].width = LayoutMath.clampedWidth(panels[activeIdx].width / z); hud.flash(String(format: "Genişlik %.2f m", panels[activeIdx].width))
+            case .faceMe: hud.flash("Bana dön")
+            default: break
             }
-            panelWorld = oriented(center: center, head: head)
-            changedAt = Date()
-        }
-        if let t = changedAt, Date().timeIntervalSince(t) > 0.3, let w = panelWorld {
-            changedAt = nil
-            let m = (0..<4).flatMap { c in (0..<4).map { r in w[c][r] } }
-            settings.onPanelChanged?(m, settings.panelWidthM)
+            panels[activeIdx].world = oriented(center: ctr, head: head, roll: panels[activeIdx].roll)
+            changed[panels[activeIdx].id] = Date()
         }
     }
+
+    private func flushChanges() {
+        for (id, t) in changed where Date().timeIntervalSince(t) > 0.3 {
+            changed[id] = nil
+            guard let p = panels.first(where: { $0.id == id }), let w = p.world else { continue }
+            let m = (0..<4).flatMap { c in (0..<4).map { r in w[c][r] } }
+            settings.onPanelChanged?(id, m, p.width)
+        }
+    }
+
+    // MARK: AR cursor
 
     private enum Drag { case move, resize }
     private var drag: Drag?
     private var dragLocal = SIMD2<Float>(0, 0)       // handle point the hand stays pinned to while dragging
     private var hover: PanelRegion = .none
     private var handlesVisible = false
-    private var pickerOpen = false
-    private var panelRoll: Float = 0
-    private func oriented(center: SIMD3<Float>, head: SIMD3<Float>) -> simd_float4x4 {
-        let f = LayoutMath.facing(center: center, head: head)
-        guard panelRoll != 0 else { return f }
-        let c = cos(panelRoll), s = sin(panelRoll)
-        var r = matrix_identity_float4x4
-        r.columns.0 = SIMD4(c, s, 0, 0); r.columns.1 = SIMD4(-s, c, 0, 0)
-        return f * r
-    }
+    private var pickerOpen: Bool { pickerIdx != nil }
+    private var handModel: simd_float4x4?
+    private var handHalf: Float = 0.05
     static let themeNames = ["Siyah", "Lav lambası", "Vice City", "Yağmur", "Güneşli", "Matrix", "Cyberpunk", "Steampunk", "Solarpunk"]
 
-    /// Layout-mode mouse: steer a head-relative ray, hit-test it against the panel and its handles,
-    /// drag the move bar / resize corner, click content → enter screen mode there.
-    private func updateARCursor(camera: simd_float4x4, hasFrame: Bool, aspect: Float) {
-        let layout = settings.layoutActive
-        if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0; drag = nil }
-        handModel = nil; handUV = nil; handlesVisible = false; hover = .none
-        guard layout, hasFrame, var panel = panelWorld else { pickerOpen = false; _ = settings.takeInputs(); drag = nil; return }
-        let head = SIMD3(camera.columns.3.x, camera.columns.3.y, camera.columns.3.z)
-        let width = settings.panelWidthM
-        let inputs = settings.takeInputs()
-        // Resolve what is under the ray first (using the ray before this frame's movement while dragging).
-        func rayHit() -> (point: SIMD3<Float>, local: SIMD2<Float>, t: Float, d: SIMD3<Float>)? {
-            let rot = simd_float3x3(SIMD3(camera.columns.0.x, camera.columns.0.y, camera.columns.0.z),
-                                    SIMD3(camera.columns.1.x, camera.columns.1.y, camera.columns.1.z),
-                                    SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
-            let d = simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch))
-            let n = SIMD3(panel.columns.2.x, panel.columns.2.y, panel.columns.2.z)
-            let c = SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z)
-            let denom = simd_dot(d, n)
-            guard abs(denom) > 1e-4 else { return nil }
-            let t = simd_dot(c - head, n) / denom
-            guard t > 0.1 else { return nil }
-            let p = head + d * t
-            let l = panel.inverse * SIMD4(p, 1)
-            return (p, SIMD2(l.x, l.y), t, d)
+    private struct RayHit { var idx: Int; var point: SIMD3<Float>; var local: SIMD2<Float>; var t: Float }
+
+    private func rot3(_ m: simd_float4x4) -> simd_float3x3 {
+        simd_float3x3(SIMD3(m.columns.0.x, m.columns.0.y, m.columns.0.z), SIMD3(m.columns.1.x, m.columns.1.y, m.columns.1.z), SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
+    }
+
+    private func rayHit(_ idx: Int, head: SIMD3<Float>, dir d: SIMD3<Float>) -> RayHit? {
+        guard panels.indices.contains(idx), let w = panels[idx].world else { return nil }
+        let n = SIMD3(w.columns.2.x, w.columns.2.y, w.columns.2.z), c = center(of: w)
+        let denom = simd_dot(d, n)
+        guard abs(denom) > 1e-4 else { return nil }
+        let t = simd_dot(c - head, n) / denom
+        guard t > 0.1 else { return nil }
+        let p = head + d * t
+        let l = w.inverse * SIMD4(p, 1)
+        return RayHit(idx: idx, point: p, local: SIMD2(l.x, l.y), t: t)
+    }
+
+    /// Nearest panel whose hover area (panel + handles + open picker) the ray passes through.
+    private func bestHit(head: SIMD3<Float>, dir d: SIMD3<Float>) -> RayHit? {
+        var best: RayHit?
+        for i in panels.indices {
+            guard let h = rayHit(i, head: head, dir: d) else { continue }
+            let p = panels[i]
+            guard PanelHandleGeometry.hoverArea(width: p.width, aspect: p.aspect).contains(h.local.x, h.local.y) else { continue }
+            if best == nil || h.t < best!.t { best = h }
         }
-        for i in inputs {
+        return best
+    }
+
+    private func updateARCursor(camera: simd_float4x4, hasFrame: Bool) {
+        let layout = settings.layoutActive
+        if layout != wasLayout { wasLayout = layout; arYaw = 0; arPitch = 0; drag = nil; dragIdx = nil }
+        handModel = nil; handUV = nil; handlesVisible = false; hover = .none; hoverIdx = nil
+        guard layout, hasFrame, !panels.isEmpty else { pickerIdx = nil; _ = settings.takeInputs(); drag = nil; dragIdx = nil; return }
+        let head = center(of: camera)
+        let rot = rot3(camera)
+        func dirNow() -> SIMD3<Float> { simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch)) }
+
+        for i in settings.takeInputs() {
             switch i.kind {
             case "move":
-                if let dr = drag {
-                    var center = SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z)
+                if let dr = drag, let di = dragIdx, panels.indices.contains(di) {
                     switch dr {
                     case .move:
-                        center = LayoutMath.moved(center: center, head: head, dYaw: -Float(i.dx) * 0.0022, dPitch: -Float(i.dy) * 0.0022, dRadius: 0)
-                        panel = oriented(center: center, head: head)
-                        panelWorld = panel
+                        if let w = panels[di].world {
+                            let ctr = LayoutMath.moved(center: center(of: w), head: head, dYaw: -Float(i.dx) * 0.0022, dPitch: -Float(i.dy) * 0.0022, dRadius: 0)
+                            panels[di].world = oriented(center: ctr, head: head, roll: panels[di].roll)
+                        }
                     case .resize:
-                        settings.panelWidthM = LayoutMath.clampedWidth(settings.panelWidthM * (1 + Float(i.dx + i.dy) * 0.003))
+                        panels[di].width = LayoutMath.clampedWidth(panels[di].width * (1 + Float(i.dx + i.dy) * 0.003))
                     }
-                    changedAt = Date()
+                    changed[panels[di].id] = Date()
                 } else {
                     arYaw = max(-0.6, min(0.6, arYaw - Float(i.dx) * 0.0022))
                     arPitch = max(-0.45, min(0.45, arPitch - Float(i.dy) * 0.0022))
                 }
             case "down":
-                if drag == nil {
-                    let hit = rayHit()
-                    let region = hit.map { PanelHandleGeometry.hit(x: $0.local.x, y: $0.local.y, width: settings.panelWidthM, aspect: aspect, pickerOpen: pickerOpen) } ?? .none
-                    // The picker stays open until a theme is chosen or something else is clicked.
-                    switch region { case .theme: break; case .themeChoice: pickerOpen = false; default: pickerOpen = false }
-                    switch region {
-                    case .content(let u, let v): settings.onEnterScreen?(u, v)
-                    case .moveBar: drag = .move; dragLocal = PanelHandleGeometry.moveBar(width: settings.panelWidthM, aspect: aspect).center
-                    case .resizeCorner: drag = .resize; dragLocal = PanelHandleGeometry.resizeCorner(width: settings.panelWidthM, aspect: aspect).center
-                    case .rotate:
-                        panelRoll = panelRoll == 0 ? .pi / 2 : 0
-                        panelWorld = oriented(center: SIMD3(panel.columns.3.x, panel.columns.3.y, panel.columns.3.z), head: head)
-                        panel = panelWorld ?? panel; changedAt = Date()
-                        hud.flash(panelRoll == 0 ? "Yatay" : "Dikey")
-                    case .darken: settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "Dünya karartıldı")
-                    case .theme: break
-                    case .themeChoice(let i):
-                        if settings.passthrough { hud.flash("Önce 🌙 ile dünyayı karart") }
-                        else { settings.theme = i; hud.flash(Self.themeNames[i]) }
-                    case .add: settings.onAddDisplay?(); hud.flash("Yeni ekran isteği gönderildi")
-                    case .close: hud.flash("Kapatma F5'te geliyor")
-                    case .none: break
-                    }
+                guard drag == nil else { break }
+                let hit = bestHit(head: head, dir: dirNow())
+                var region: PanelRegion = .none
+                if let h = hit {
+                    let p = panels[h.idx]
+                    region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: p.width, aspect: p.aspect, pickerOpen: pickerIdx == h.idx)
                 }
-            case "up": drag = nil
+                // The picker stays open until a theme is chosen or something else is clicked.
+                if case .theme = region { pickerIdx = hit?.idx } else { pickerIdx = nil }
+                guard let h = hit else { break }
+                activeIdx = h.idx
+                let p = panels[h.idx]
+                switch region {
+                case .content(let u, let v): settings.onEnterScreen?(p.id, u, v)
+                case .moveBar: drag = .move; dragIdx = h.idx; dragLocal = PanelHandleGeometry.moveBar(width: p.width, aspect: p.aspect).center
+                case .resizeCorner: drag = .resize; dragIdx = h.idx; dragLocal = PanelHandleGeometry.resizeCorner(width: p.width, aspect: p.aspect).center
+                case .rotate:
+                    if p.kind == .mirror {
+                        panels[h.idx].roll = p.roll == 0 ? .pi / 2 : 0
+                        if let w = p.world { panels[h.idx].world = oriented(center: center(of: w), head: head, roll: panels[h.idx].roll) }
+                        changed[p.id] = Date(); hud.flash(panels[h.idx].roll == 0 ? "Yatay" : "Dikey")
+                    } else {
+                        settings.onRotate?(p.id, p.orientation == .landscape ? .portrait : .landscape)
+                    }
+                case .darken: settings.passthrough.toggle(); hud.flash(settings.passthrough ? "Gerçek dünya" : "Dünya karartıldı")
+                case .theme: break
+                case .themeChoice(let k):
+                    if settings.passthrough { hud.flash("Önce 🌙 ile dünyayı karart") } else { settings.theme = k; hud.flash(Self.themeNames[k]) }
+                case .add: settings.onAddDisplay?(p.id); hud.flash("Yeni ekran ekleniyor…")
+                case .close:
+                    if p.kind == .mirror { hud.flash("Ana ekran kapatılamaz") }
+                    else if let a = closeArm, a.id == p.id, Date().timeIntervalSince(a.at) < 3 { closeArm = nil; settings.onRemoveDisplay?(p.id) }
+                    else { closeArm = (p.id, Date()); hud.flash("Kapatmak için tekrar tıkla") }
+                case .none: break
+                }
+            case "up": drag = nil; dragIdx = nil
             default: break
             }
         }
-        let w = settings.panelWidthM
-        var handHalfSize: Float = 0.045
+
+        // Where the hand goes this frame.
         var model: simd_float4x4
-        if let dr = drag {
-            // Pinned to the grabbed handle while the panel moves under the mouse.
-            _ = dr
-            let p = panel * SIMD4(dragLocal.x, dragLocal.y, 0.01, 1)
-            model = panel; model.columns.3 = p
-            handlesVisible = true; hover = dr == .move ? .moveBar : .resizeCorner
+        var handHalfSize: Float = 0.045
+        let d = dirNow()
+        if let dr = drag, let di = dragIdx, panels.indices.contains(di), let w = panels[di].world {
+            model = w; model.columns.3 = w * SIMD4(dragLocal.x, dragLocal.y, 0.01, 1)
+            handlesVisible = true; hoverIdx = di; hover = dr == .move ? .moveBar : .resizeCorner
             handHalfSize = 0.0225 * 1.4
-        } else if let h = rayHit() {
-            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: w, aspect: aspect, pickerOpen: pickerOpen)
-            if region == .theme { pickerOpen = true }
-            let area = PanelHandleGeometry.hoverArea(width: w, aspect: aspect)
-            if area.contains(h.local.x, h.local.y) {
-                hover = region; handlesVisible = true
-                if case .content(let u, let v) = region { handUV = (u, v) }
-                model = panel; model.columns.3 = SIMD4(h.point + SIMD3(panel.columns.2.x, panel.columns.2.y, panel.columns.2.z) * 0.012, 1)
-                handHalfSize = 0.0225 * max(h.t, 0.8)
-            } else {
-                model = camera; model.columns.3 = SIMD4(h.point, 1); handHalfSize = 0.0225 * max(h.t, 0.8)
-            }
+        } else if let h = bestHit(head: head, dir: d), let w = panels[h.idx].world {
+            let p = panels[h.idx]
+            let region = PanelHandleGeometry.hit(x: h.local.x, y: h.local.y, width: p.width, aspect: p.aspect, pickerOpen: pickerIdx == h.idx)
+            hover = region; hoverIdx = h.idx; handlesVisible = true
+            if case .theme = region { pickerIdx = h.idx }      // opens on hover
+            if case .content(let u, let v) = region { handUV = (u, v) }
+            model = w; model.columns.3 = SIMD4(h.point + SIMD3(w.columns.2.x, w.columns.2.y, w.columns.2.z) * 0.012, 1)
+            handHalfSize = 0.0225 * max(h.t, 0.8)
         } else {
-            var m = camera
-            let rot = simd_float3x3(SIMD3(camera.columns.0.x, camera.columns.0.y, camera.columns.0.z),
-                                    SIMD3(camera.columns.1.x, camera.columns.1.y, camera.columns.1.z),
-                                    SIMD3(camera.columns.2.x, camera.columns.2.y, camera.columns.2.z))
-            m.columns.3 = SIMD4(head + simd_normalize(rot * LayoutMath.direction(yaw: arYaw, pitch: arPitch)) * 2, 1)
+            var m = camera; m.columns.3 = SIMD4(head + d * 2, 1)
             model = m; handHalfSize = 0.0225 * 2
         }
+        if let pi = pickerIdx { handlesVisible = true; if hoverIdx == nil { hoverIdx = pi } }
         var off = matrix_identity_float4x4; off.columns.3 = SIMD4(0, -handHalfSize, 0, 1)   // fingertip at the hit point
-        if pickerOpen { handlesVisible = true }
         handModel = model * off
         handHalf = handHalfSize
     }
-    private var handHalf: Float = 0.05
+
+    // MARK: frame
 
     func draw(in view: MTKView) {
         let cal = settings.calibration
@@ -281,21 +368,34 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         guard ds.width > 0, let drawable = view.currentDrawable, let cb = queue.makeCommandBuffer() else { return }
         ensureEyeTextures(cal, drawable: ds)
         guard eyeTextures.count == 2 else { return }
+        texRefs.removeAll(keepingCapacity: true)
         let frame = ar.latestFrame
         let camT = frame?.camera.transform ?? matrix_identity_float4x4
-        if frame != nil, settings.takeRecenter() || panelWorld == nil {
-            panelWorld = Self.placePanel(camera: camT, distance: panelDistanceM)
-        }
+        syncScene()
+        if frame != nil { placePending(camera: camT, force: settings.takeRecenter()) }
         applyCommands(camera: camT, hasFrame: frame != nil)
-        let panelWidthM = settings.panelWidthM
-        let panelModel = panelWorld ?? { var m = matrix_identity_float4x4; m.columns.3 = SIMD4(0, 0, -panelDistanceM, 1); return m }()
+        // Panel textures first so aspect ratios are current for hit testing.
+        var tex: [Int: (MTLTexture, Float)] = [:]
+        for i in panels.indices {
+            if let t = videoTexture(panels[i].streamId) { tex[i] = t; panels[i].aspect = t.1 }
+        }
+        updateARCursor(camera: camT, hasFrame: frame != nil)
+        flushChanges()
         let v4 = camT.inverse                      // world -> head (camera) space, full 6DoF
-        let video = videoTexture()
-        updateARCursor(camera: camT, hasFrame: frame != nil, aspect: video?.1 ?? 1.6)
         let cameraTex = settings.passthrough ? cameraTextures(frame) : nil
         let ipd = Float(cal.lensSeparationMm) / 1000
         let aspectEye = Double(eyeSize.width) / Double(eyeSize.height)
         let proj = LensMath.perspective(verticalFovDegrees: cal.fovDegrees, aspect: aspectEye, near: 0.05, far: 50)
+        let head = center(of: camT)
+        let order = panels.indices.sorted { a, b in
+            let da = panels[a].world.map { simd_length(center(of: $0) - head) } ?? 0
+            let db = panels[b].world.map { simd_length(center(of: $0) - head) } ?? 0
+            return da > db
+        }
+        let cur = cursor.snapshot
+        let handlesPanel = dragIdx ?? pickerIdx ?? hoverIdx
+        let refs = texRefs
+        cb.addCompletedHandler { _ in _ = refs.count }
 
         for eye in 0..<2 {
             let rpd = MTLRenderPassDescriptor()
@@ -304,12 +404,20 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
             rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.01, green: 0.01, blue: 0.012, alpha: 1)
             rpd.colorAttachments[0].storeAction = .store
             guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { continue }
+            var shift = simd_float4x4(1)
+            shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
+            struct U { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
+            func sprite(_ model: simd_float4x4, _ half: SIMD2<Float>, _ t: MTLTexture) {
+                var u = U(mvp: proj * shift * v4 * model, halfSize: half)
+                enc.setRenderPipelineState(spritePipeline)
+                enc.setVertexBytes(&u, length: MemoryLayout<U>.size, index: 0)
+                enc.setFragmentTexture(t, index: 0)
+                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            }
             if let (yT, cT, cf) = cameraTex, !cal.testPattern {
                 let res = cf.camera.imageResolution, K = cf.camera.intrinsics
                 let w = Float(res.width), h = Float(res.height), D: Float = 8
                 let fx = K[0][0], fy = K[1][1], cx = K[2][0], cy = K[2][1]
-                var shift = simd_float4x4(1)
-                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
                 struct CU { var mvp: simd_float4x4; var xr: SIMD2<Float>; var yr: SIMD2<Float>; var z: Float }
                 var cu = CU(mvp: proj * shift,
                             xr: SIMD2(-cx / fx * D, (w - cx) / fx * D), yr: SIMD2(-(h - cy) / fy * D, cy / fy * D), z: -D)
@@ -329,60 +437,48 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
-            if cal.testPattern || video == nil {
+            if cal.testPattern || tex.isEmpty {
                 var asp = Float(aspectEye); var sc = SIMD2<Float>(1, 1)
                 enc.setRenderPipelineState(testPipeline)
                 enc.setVertexBytes(&sc, length: 8, index: 0)
                 enc.setFragmentBytes(&asp, length: 4, index: 0)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            } else if let (tex, aspect) = video {
-                var shift = simd_float4x4(1)
-                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
-                let model = panelModel
-                struct U { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
-                var u = U(mvp: proj * shift * v4 * model, halfSize: SIMD2(panelWidthM / 2, panelWidthM / 2 / aspect))
-                enc.setRenderPipelineState(panelPipeline)
-                enc.setVertexBytes(&u, length: MemoryLayout<U>.size, index: 0)
-                enc.setFragmentTexture(tex, index: 0)
-                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-                let c = cursor.snapshot
-                if c.visible, let ct = c.texture {
-                    let r = CursorLayout.spriteRect(u: c.u, v: c.v, hotspot: c.hotspot, sizePt: c.sizePt,
-                                                    displayWidthPt: c.displayWidthPt, aspect: Double(aspect), scale: 1.5)
-                    let ph = panelWidthM / aspect
-                    var cm = model
-                    cm = model * { var t = matrix_identity_float4x4; t.columns.3 = SIMD4(Float(r.center.x - 0.5) * panelWidthM, Float(0.5 - r.center.y) * ph, 0.004, 1); return t }()
-                    var cu = U(mvp: proj * shift * v4 * cm, halfSize: SIMD2(Float(r.size.x) * panelWidthM / 2, Float(r.size.y) * ph / 2))
-                    enc.setRenderPipelineState(spritePipeline)
-                    enc.setVertexBytes(&cu, length: MemoryLayout<U>.size, index: 0)
-                    enc.setFragmentTexture(ct, index: 0)
+            } else {
+                for i in order {
+                    guard let (t, aspect) = tex[i], let model = panels[i].world else { continue }
+                    let w = panels[i].width
+                    var u = U(mvp: proj * shift * v4 * model, halfSize: SIMD2(w / 2, w / 2 / aspect))
+                    enc.setRenderPipelineState(panelPipeline)
+                    enc.setVertexBytes(&u, length: MemoryLayout<U>.size, index: 0)
+                    enc.setFragmentTexture(t, index: 0)
                     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    if cur.visible, cur.panelId == panels[i].id, let ct = cur.texture {
+                        let r = CursorLayout.spriteRect(u: cur.u, v: cur.v, hotspot: cur.hotspot, sizePt: cur.sizePt,
+                                                        displayWidthPt: cur.displayWidthPt, aspect: Double(aspect), scale: 1.5)
+                        let ph = w / aspect
+                        var cm = model
+                        cm.columns.3 = model * SIMD4(Float(r.center.x - 0.5) * w, Float(0.5 - r.center.y) * ph, 0.004, 1)
+                        sprite(cm, SIMD2(Float(r.size.x) * w / 2, Float(r.size.y) * ph / 2), ct)
+                    }
                 }
             }
-            if handlesVisible, let video, let handles = cursor.handles {
-                let w = panelWidthM, asp = video.1
-                var shift = simd_float4x4(1)
-                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
-                struct HC { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
+            if handlesVisible, let hi = handlesPanel, panels.indices.contains(hi), let model = panels[hi].world, let handles = cursor.handles {
+                let w = panels[hi].width, asp = panels[hi].aspect
                 func draw(_ r: LocalRect, _ key: String, hot: Bool) {
-                    guard let tex = handles.get(key, hot: hot) else { return }
-                    var m = panelModel; m.columns.3 = panelModel * SIMD4(r.cx, r.cy, 0.006, 1)
+                    guard let t = handles.get(key, hot: hot) else { return }
+                    var m = model; m.columns.3 = model * SIMD4(r.cx, r.cy, 0.006, 1)
                     let k: Float = hot ? 1.1 : 1
-                    var hc = HC(mvp: proj * shift * v4 * m, halfSize: SIMD2(r.w / 2 * k, r.h / 2 * k))
-                    enc.setRenderPipelineState(spritePipeline)
-                    enc.setVertexBytes(&hc, length: MemoryLayout<HC>.size, index: 0)
-                    enc.setFragmentTexture(tex, index: 0)
-                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    sprite(m, SIMD2(r.w / 2 * k, r.h / 2 * k), t)
                 }
                 draw(PanelHandleGeometry.moveBar(width: w, aspect: asp), "bar", hot: hover == .moveBar)
                 draw(PanelHandleGeometry.resizeCorner(width: w, aspect: asp), "corner", hot: hover == .resizeCorner)
                 let b = PanelHandleGeometry.buttons(width: w, aspect: asp)
                 draw(b[0], "rotate", hot: hover == .rotate)
                 draw(b[1], "add", hot: hover == .add)
-                draw(b[2], "close", hot: hover == .close)
+                draw(b[2], "close", hot: hover == .close || closeArm?.id == panels[hi].id)
                 draw(b[3], "dark", hot: hover == .darken || !settings.passthrough)
                 draw(b[4], "theme", hot: hover == .theme || pickerOpen)
-                if pickerOpen {
+                if pickerIdx == hi {
                     let c = PanelHandleGeometry.themeCircles(width: w, aspect: asp)
                     for (i, r) in c.enumerated() {
                         var sel = false; if case .themeChoice(let k) = hover { sel = k == i }
@@ -390,24 +486,12 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                     }
                 }
             }
-            if let hm = handModel, let ht = cursor.handTexture {
-                var shift = simd_float4x4(1)
-                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
-                struct HC { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
-                var hc = HC(mvp: proj * shift * v4 * hm, halfSize: SIMD2(handHalf, handHalf))
-                enc.setRenderPipelineState(spritePipeline)
-                enc.setVertexBytes(&hc, length: MemoryLayout<HC>.size, index: 0)
-                enc.setFragmentTexture(ht, index: 0)
-                enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-            }
+            if let hm = handModel, let ht = cursor.handTexture { sprite(hm, SIMD2(handHalf, handHalf), ht) }
             if let (ht, hasp) = hud.current() {
-                var shift = simd_float4x4(1)
-                shift.columns.3 = SIMD4(eye == 0 ? ipd / 2 : -ipd / 2, 0, 0, 1)
                 var place = simd_float4x4(1); place.columns.3 = SIMD4(0, -0.17, -0.9, 1)
-                struct HU { var mvp: simd_float4x4; var halfSize: SIMD2<Float> }
-                var hu = HU(mvp: proj * shift * place, halfSize: SIMD2(0.07 * hasp, 0.07))
+                var hu = U(mvp: proj * shift * place, halfSize: SIMD2(0.07 * hasp, 0.07))
                 enc.setRenderPipelineState(spritePipeline)
-                enc.setVertexBytes(&hu, length: MemoryLayout<HU>.size, index: 0)
+                enc.setVertexBytes(&hu, length: MemoryLayout<U>.size, index: 0)
                 enc.setFragmentTexture(ht, index: 0)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }

@@ -16,7 +16,7 @@ final class StreamModel: ObservableObject {
     let ar = ARSessionController()
     let hud = HUDOverlay()
     @Published var stereo = true
-    let decoder = VideoDecoder()
+    let bank = DecoderBank()
     private var lastIDR = Date.distantPast
     private var overSince: Date?
     private var fpsCount = 0
@@ -36,7 +36,7 @@ final class StreamModel: ObservableObject {
         connection.onMessage = { [weak self] msg in
             switch msg {
             case .calibration(let c): self?.settings.calibration = c
-            case .scene(let sc): if let p = sc.panels.first { self?.settings.panelWidthM = Float(p.widthM) }
+            case .scene(let sc): self?.settings.setScene(sc.panels)
             case .mode(let m): self?.settings.passthrough = m.passthrough
             case .cursor(let c): self?.cursor.update(c)
             case .cursorImage(let i): self?.cursor.update(i)
@@ -52,13 +52,15 @@ final class StreamModel: ObservableObject {
             }
         }
         connection.onVideoPacket = { [weak self] p in self?.handle(p) }
-        decoder.onDecoded = { [weak self] captureUs in self?.decoded(captureUs) }
-        settings.onPanelChanged = { [weak self] t, w in
-            self?.connection.send(.panelUpdate(PanelUpdate(panelId: "desktop-1", transform: t, widthM: Double(w), curvature: 0)))
+        bank.onDecoded = { [weak self] captureUs in self?.decoded(captureUs) }
+        settings.onPanelChanged = { [weak self] id, t, w in
+            self?.connection.send(.panelUpdate(PanelUpdate(panelId: id, transform: t, widthM: Double(w), curvature: 0)))
         }
-        settings.onAddDisplay = { [weak self] in self?.connection.send(.addDisplay(AddDisplay(afterPanelId: "desktop-1"))) }
-        settings.onEnterScreen = { [weak self] u, v in
-            self?.connection.send(.enterScreen(EnterScreen(panelId: "desktop-1", u: u, v: v)))
+        settings.onRotate = { [weak self] id, o in self?.connection.send(.rotate(Rotate(panelId: id, orientation: o))) }
+        settings.onRemoveDisplay = { [weak self] id in self?.connection.send(.removeDisplay(RemoveDisplay(panelId: id))) }
+        settings.onAddDisplay = { [weak self] after in self?.connection.send(.addDisplay(AddDisplay(afterPanelId: after))) }
+        settings.onEnterScreen = { [weak self] id, u, v in
+            self?.connection.send(.enterScreen(EnterScreen(panelId: id, u: u, v: v)))
         }
         ar.start()
         connection.start()
@@ -68,10 +70,10 @@ final class StreamModel: ObservableObject {
         let off = connection.clockOffsetUs
         let age = ClockSync.ageMs(captureTimeUs: p.header.captureTimeUs, nowUs: HostConnection.nowUs(), offsetUs: off)
         if age > 300 && !p.header.flags.contains(.keyframe) {
-            Task { @MainActor in self.watchdog(age: age) }
+            Task { @MainActor in self.watchdog(age: age, streamId: Int(p.header.streamId)) }
             return // drop stale frame
         }
-        decoder.decode(annexB: p.payload, hevc: p.header.flags.contains(.hevc), captureTimeUs: p.header.captureTimeUs)
+        bank.decoder(Int(p.header.streamId)).decode(annexB: p.payload, hevc: p.header.flags.contains(.hevc), captureTimeUs: p.header.captureTimeUs)
         Task { @MainActor in self.codec = p.header.flags.contains(.hevc) ? "HEVC" : "H.264" }
     }
 
@@ -89,9 +91,9 @@ final class StreamModel: ObservableObject {
         }
     }
 
-    private func watchdog(age: Double) {
+    private func watchdog(age: Double, streamId: Int) {
         guard Date().timeIntervalSince(lastIDR) > 0.5 else { return }
         lastIDR = Date()
-        connection.send(.requestIDR(RequestIDR(streamId: 0)))
+        connection.send(.requestIDR(RequestIDR(streamId: streamId)))
     }
 }
