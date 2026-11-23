@@ -7,7 +7,7 @@ Legend: **[S]** Shared · **[M]** MacHost · **[P]** PhoneClient · **[U]** need
 ### Stage 1 — Pipeline
 
 **F0 · Preparation**
-- [ ] [M][P][S] Create the repo (section 3), `project.yml`, `bootstrap.sh`, docs split from this file; both schemes build and launch; `swift test` green
+- [x] [M][P][S] Create the repo (section 3), `project.yml`, `bootstrap.sh`, docs split from this file; both schemes build and launch; `swift test` green
 - [ ] [U] Phone fits the box; rear wide camera + LiDAR uncovered (cut a window if needed)
 - [ ] [U] Measure lens centre distance and screen-to-lens distance → calibration defaults
 - [ ] [U] Enable "Switch to Desktop 1…9" shortcuts
