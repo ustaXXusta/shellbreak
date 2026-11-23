@@ -4,33 +4,36 @@ import simd
 
 /// Pure geometry for arranging macOS displays like physical monitors (rects in global display points).
 public enum DisplayLayout {
-    /// Snap `moving` so one of its edges touches an edge of another display (nearest valid spot), keeping them adjacent
-    /// and never overlapping. Returns nil when no overlap-free position exists.
+    /// Place `moving` against the nearest edge of another display. It may slide freely along that edge
+    /// (only the shared side is forced), snapping to flush/centre alignment when close, and never overlaps any display.
     public static func snapped(moving: CGRect, others: [CGRect]) -> CGRect? {
-        var best = moving
+        if others.isEmpty { return moving }
+        var best: CGRect?
         var bestDist = CGFloat.greatestFiniteMagnitude
-        var candidates: [CGRect] = [moving]
+        let slack: CGFloat = 8, snapRange: CGFloat = 60
+        func consider(_ c: CGRect) {
+            guard !others.contains(where: { $0.intersects(c.insetBy(dx: 1, dy: 1)) }) else { return }
+            let d = hypot(c.minX - moving.minX, c.minY - moving.minY)
+            if d < bestDist { bestDist = d; best = c }
+        }
+        func aligned(_ v: CGFloat, _ marks: [CGFloat]) -> CGFloat {
+            var out = v
+            for m in marks where abs(m - v) < snapRange { out = m }
+            return out
+        }
         for o in others {
-            // Horizontal adjacency (left/right of o), vertical offset kept or aligned to o's top/bottom.
             for x in [o.maxX, o.minX - moving.width] {
-                for y in [moving.minY, o.minY, o.maxY - moving.height] {
-                    candidates.append(CGRect(x: x, y: y, width: moving.width, height: moving.height))
-                }
+                let lo = o.minY - moving.height + slack, hi = o.maxY - slack
+                let y = aligned(min(max(moving.minY, lo), hi), [o.minY, o.maxY - moving.height, o.midY - moving.height / 2])
+                consider(CGRect(x: x, y: y, width: moving.width, height: moving.height))
             }
-            // Vertical adjacency (above/below o).
             for y in [o.maxY, o.minY - moving.height] {
-                for x in [moving.minX, o.minX, o.maxX - moving.width] {
-                    candidates.append(CGRect(x: x, y: y, width: moving.width, height: moving.height))
-                }
+                let lo = o.minX - moving.width + slack, hi = o.maxX - slack
+                let x = aligned(min(max(moving.minX, lo), hi), [o.minX, o.maxX - moving.width, o.midX - moving.width / 2])
+                consider(CGRect(x: x, y: y, width: moving.width, height: moving.height))
             }
         }
-        for c in candidates where !others.contains(where: { $0.intersects(c.insetBy(dx: 1, dy: 1)) }) {
-            let dist = hypot(c.minX - moving.minX, c.minY - moving.minY)
-            let touching = others.isEmpty || others.contains { touches($0, c) }
-            guard touching else { continue }
-            if dist < bestDist { bestDist = dist; best = c }
-        }
-        return bestDist == .greatestFiniteMagnitude ? nil : best
+        return best
     }
 
     private static func touches(_ a: CGRect, _ b: CGRect) -> Bool {

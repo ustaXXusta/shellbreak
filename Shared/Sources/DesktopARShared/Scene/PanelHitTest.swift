@@ -14,6 +14,7 @@ public enum PanelRegion: Equatable {
     case moveBar, rotate, tilt, add, close, darken, theme
     /// 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
     case resizeCorner(Int)
+    case magnet(Int)
     case themeChoice(Int)
 }
 
@@ -30,6 +31,11 @@ public enum PanelHandleGeometry {
     public static func corners(width: Float, aspect: Float) -> [LocalRect] {
         let hw = width / 2, hh = heightM(width: width, aspect: aspect) / 2
         return [(-hw, hh), (hw, hh), (-hw, -hh), (hw, -hh)].map { LocalRect(cx: $0.0, cy: $0.1, w: 0.1, h: 0.1) }
+    }
+    /// Magnet buttons just outside the four corners: TL, TR, BL, BR.
+    public static func magnets(width: Float, aspect: Float) -> [LocalRect] {
+        let hw = width / 2 + 0.085, hh = heightM(width: width, aspect: aspect) / 2 + 0.085
+        return [(-hw, hh), (hw, hh), (-hw, -hh), (hw, -hh)].map { LocalRect(cx: $0.0, cy: $0.1, w: 0.065, h: 0.065) }
     }
     /// Rotate, Tilt, Add, Close, Darken world, Theme — left to right above the panel.
     public static let buttonCount = 6
@@ -72,6 +78,7 @@ public enum PanelHandleGeometry {
             if strip.contains(x, y) { return .theme }
         }
         for (i, r) in corners(width: width, aspect: aspect).enumerated() where r.contains(x, y) { return .resizeCorner(i) }
+        for (i, r) in magnets(width: width, aspect: aspect).enumerated() where r.contains(x, y) { return .magnet(i) }
         let b = buttons(width: width, aspect: aspect)
         if b[0].contains(x, y) { return .rotate }
         if b[1].contains(x, y) { return .tilt }

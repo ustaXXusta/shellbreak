@@ -29,15 +29,25 @@ struct ControlView: View {
                 Divider()
                 Text("Ekranlar").font(.headline)
                 ForEach(host.panels) { p in
-                    HStack {
-                        Text(p.kind == .mirror ? "1 · Ana ekran (yansıtma)" : "\(p.desktopIndex) · Sanal ekran")
-                        Spacer()
-                        if p.kind == .virtual { Button("Kaldır") { Task { await host.removeVirtual(p.id) } } }
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(p.kind == .mirror ? "1 · Ana ekran (yansıtma)" : "\(p.desktopIndex) · Sanal ekran").font(.subheadline.bold())
+                            Spacer()
+                            if p.kind == .virtual { Button("Kaldır") { Task { await host.removeVirtual(p.id) } } }
+                        }
+                        if p.kind == .virtual {
+                            Picker("Yön", selection: Binding(get: { p.orientation }, set: { o in Task { await host.setOrientation(p.id, o) } })) {
+                                Text("Yatay").tag(PanelOrientation.landscape); Text("Dikey").tag(PanelOrientation.portrait)
+                            }.pickerStyle(.segmented)
+                        }
+                        ResolutionPicker(host: host, panel: p)
                     }
+                    .padding(.vertical, 2)
                 }
+                Button("Yeni ekran ekle") { Task { await host.addVirtual() } }.disabled(!host.streaming)
+                Divider()
                 Text("Ekran düzeni").font(.headline)
                 DisplayArrangementView(host: host)
-                Button("Yeni ekran ekle") { Task { await host.addVirtual() } }.disabled(!host.streaming)
                 Button(host.streaming ? "Yayını durdur" : "Yayını başlat") {
                     Task { if host.streaming { await host.stop() } else { await host.start() } }
                 }
@@ -81,5 +91,24 @@ struct ControlView: View {
     @ViewBuilder
     private func permissionRow(_ name: String, _ ok: Bool, _ pane: String) -> some View {
         Button("\(ok ? "✓" : "✗") \(name)") { if !ok { PermissionStatus.openSettings(pane) } }
+    }
+}
+
+/// Resolution list for one panel: portrait displays list portrait sizes, landscape ones landscape sizes.
+/// A lower resolution makes text and windows bigger at the same panel size.
+struct ResolutionPicker: View {
+    @ObservedObject var host: HostController
+    let panel: PanelModel
+    private func key(_ s: CGSize) -> String { "\(Int(s.width))x\(Int(s.height))" }
+    var body: some View {
+        let options = host.resolutionOptions(for: panel)
+        let cur = host.currentResolution(panel)
+        let all = options.contains(where: { key($0) == key(cur) }) ? options : [cur] + options
+        Picker("Çözünürlük", selection: Binding(get: { key(cur) }, set: { k in
+            if let n = all.first(where: { key($0) == k }) { Task { await host.setResolution(panel.id, n) } }
+        })) {
+            ForEach(all.map(key), id: \.self) { k in Text(k.replacingOccurrences(of: "x", with: " × ")).tag(k) }
+        }
+        .font(.caption)
     }
 }

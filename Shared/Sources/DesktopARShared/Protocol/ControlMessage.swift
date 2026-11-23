@@ -84,6 +84,13 @@ public struct EnterScreen: Codable, Equatable {
     public var panelId: String; public var u: Double; public var v: Double
     public init(panelId: String, u: Double, v: Double) { self.panelId = panelId; self.u = u; self.v = v }
 }
+/// Two panels were joined with magnets: panel B sits against panel A (corners: 0 TL, 1 TR, 2 BL, 3 BR in panel space).
+public struct MagnetJoin: Codable, Equatable {
+    public var panelA: String; public var cornerA: Int; public var panelB: String; public var cornerB: Int
+    public init(panelA: String, cornerA: Int, panelB: String, cornerB: Int) {
+        self.panelA = panelA; self.cornerA = cornerA; self.panelB = panelB; self.cornerB = cornerB
+    }
+}
 public struct CursorState: Codable, Equatable {
     public var panelId: String; public var u: Double; public var v: Double; public var visible: Bool; public var imageId: Int
     public init(panelId: String, u: Double, v: Double, visible: Bool, imageId: Int) {
@@ -145,7 +152,7 @@ public enum ControlMessage: Equatable {
     case hello(Hello), ping(Ping), pong(Pong), scene(SceneMessage), startupScan(StartupScan)
     case panelUpdate(PanelUpdate), addDisplay(AddDisplay), removeDisplay(RemoveDisplay), unhideAll
     case rotate(Rotate), qualityRequest(QualityRequest), requestIDR(RequestIDR)
-    case inputMode(InputMode), arInput(ARInput), layoutCommand(LayoutCommand), enterScreen(EnterScreen)
+    case inputMode(InputMode), arInput(ARInput), layoutCommand(LayoutCommand), enterScreen(EnterScreen), magnet(MagnetJoin)
     case cursor(CursorState), cursorImage(CursorImage), gazeFocus(GazeFocus)
     case calibration(Calibration), mode(ModeMessage), hud(HUD), stats(Stats)
     case unknown(String)
@@ -156,7 +163,7 @@ public enum ControlMessage: Equatable {
         case .startupScan: "startup_scan"; case .panelUpdate: "panel_update"; case .addDisplay: "add_display"
         case .removeDisplay: "remove_display"; case .unhideAll: "unhide_all"; case .rotate: "rotate"
         case .qualityRequest: "quality_request"; case .requestIDR: "request_idr"; case .inputMode: "input_mode"
-        case .arInput: "ar_input"; case .layoutCommand: "layout_command"; case .enterScreen: "enter_screen"
+        case .arInput: "ar_input"; case .layoutCommand: "layout_command"; case .enterScreen: "enter_screen"; case .magnet: "magnet"
         case .cursor: "cursor"; case .cursorImage: "cursor_image"; case .gazeFocus: "gaze_focus"
         case .calibration: "calibration"; case .mode: "mode"; case .hud: "hud"; case .stats: "stats"
         case .unknown(let t): t
@@ -194,6 +201,7 @@ extension ControlMessage: Codable {
         case "ar_input": self = .arInput(try p(ARInput.self))
         case "layout_command": self = .layoutCommand(try p(LayoutCommand.self))
         case "enter_screen": self = .enterScreen(try p(EnterScreen.self))
+        case "magnet": self = .magnet(try p(MagnetJoin.self))
         case "cursor": self = .cursor(try p(CursorState.self))
         case "cursor_image": self = .cursorImage(try p(CursorImage.self))
         case "gaze_focus": self = .gazeFocus(try p(GazeFocus.self))
@@ -225,6 +233,7 @@ extension ControlMessage: Codable {
         case .arInput(let m): try m.encode(to: encoder)
         case .layoutCommand(let m): try m.encode(to: encoder)
         case .enterScreen(let m): try m.encode(to: encoder)
+        case .magnet(let m): try m.encode(to: encoder)
         case .cursor(let m): try m.encode(to: encoder)
         case .cursorImage(let m): try m.encode(to: encoder)
         case .gazeFocus(let m): try m.encode(to: encoder)

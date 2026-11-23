@@ -39,6 +39,11 @@ final class PanelHitTestTests: XCTestCase {
         let btn = b[5]
         XCTAssertEqual(PanelHandleGeometry.hit(x: btn.cx, y: btn.cy + btn.h / 2 + 0.004, width: w, aspect: a, pickerOpen: true), .theme)
     }
+    func testMagnetsOutsideCorners() {
+        let m = PanelHandleGeometry.magnets(width: w, aspect: a)
+        XCTAssertEqual(m.count, 4)
+        for (i, r) in m.enumerated() { XCTAssertEqual(PanelHandleGeometry.hit(x: r.cx, y: r.cy, width: w, aspect: a), .magnet(i)) }
+    }
     func testOutside() {
         XCTAssertEqual(PanelHandleGeometry.hit(x: 5, y: 5, width: w, aspect: a), .none)
     }

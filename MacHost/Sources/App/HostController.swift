@@ -175,6 +175,7 @@ final class HostController: ObservableObject {
         case .enterScreen(let e):
             let d = panels.first(where: { $0.id == e.panelId })?.displayID ?? CGMainDisplayID()
             inputController.enterScreen(u: e.u, v: e.v, displayID: d)
+        case .magnet(let m): applyMagnet(m)
         case .addDisplay: Task { await addVirtual() }
         case .removeDisplay(let r): Task { await removeVirtual(r.panelId) }
         case .rotate(let r): Task { await rotate(r.panelId, r.orientation) }
@@ -235,6 +236,71 @@ final class HostController: ObservableObject {
         hud("Ekranlar odadaki sıraya göre dizildi")
     }
 
+    // MARK: magnets: joined panels become joined macOS displays
+
+    private func applyMagnet(_ m: MagnetJoin) {
+        refreshDisplays()
+        guard let pa = panels.first(where: { $0.id == m.panelA }), let pb = panels.first(where: { $0.id == m.panelB }),
+              let da = displays.first(where: { $0.id == pa.displayID }), let db = displays.first(where: { $0.id == pb.displayID }),
+              let nb = MagnetMath.normalizedCornerB(cornerA: m.cornerA, cornerB: m.cornerB) else { hud("Farklı köşeler seç"); return }
+        // The main display cannot move, so when B is main, A is the one that moves against it.
+        let moveB = !db.isMain
+        let base = moveB ? da : db, mover = moveB ? db : da
+        guard let origin = MagnetMath.displayOrigin(a: base.bounds, bSize: mover.bounds.size,
+                                                    cornerA: moveB ? m.cornerA : nb, cornerB: moveB ? nb : m.cornerA) else { return }
+        var origins: [CGDirectDisplayID: CGPoint] = [mover.id: origin]
+        let rect = CGRect(origin: origin, size: mover.bounds.size)
+        var next = max(displays.map { $0.bounds.maxX }.max() ?? 0, rect.maxX)
+        for d in displays where d.id != mover.id && d.id != base.id && !d.isMain && d.bounds.intersects(rect.insetBy(dx: 1, dy: 1)) {
+            origins[d.id] = CGPoint(x: next, y: d.bounds.minY); next += d.bounds.width   // make room for other monitors
+        }
+        applyOrigins(origins)
+        hud("Ekranlar yapıştırıldı")
+    }
+
+    // MARK: resolution / scale
+
+    func resolutionOptions(for p: PanelModel) -> [CGSize] {
+        if p.kind == .virtual { return DisplayResolutions.presets(portrait: p.orientation == .portrait) }
+        let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false] as CFDictionary
+        let modes = (CGDisplayCopyAllDisplayModes(p.displayID, opts) as? [CGDisplayMode] ?? []).filter { $0.isUsableForDesktopGUI() }
+        var seen = Set<String>(), out: [CGSize] = []
+        for m in modes.sorted(by: { $0.width < $1.width }) where seen.insert("\(m.width)x\(m.height)").inserted {
+            out.append(CGSize(width: m.width, height: m.height))
+        }
+        return out
+    }
+
+    func currentResolution(_ p: PanelModel) -> CGSize {
+        if p.kind == .virtual, let vd = virtuals[p.id] { return CGSize(width: vd.width, height: vd.height) }
+        return CGDisplayBounds(p.displayID).size
+    }
+
+    func setResolution(_ id: String, _ size: CGSize) async {
+        guard let i = panels.firstIndex(where: { $0.id == id }) else { return }
+        let w = Int(size.width), h = Int(size.height)
+        if panels[i].kind == .virtual {
+            guard let vd = virtuals[id], let s = registry.get(UInt8(panels[i].streamId)), vd.setMode(width: w, height: h) else { hud("Çözünürlük değişmedi"); return }
+            do { try await s.restart(width: w, height: h) } catch { lastError = error.localizedDescription; return }
+            panels[i].orientation = h > w ? .portrait : .landscape
+            panels[i].aspect = Double(w) / Double(h)
+            sendScene()
+        } else {
+            let did = panels[i].displayID
+            let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false] as CFDictionary
+            let all = (CGDisplayCopyAllDisplayModes(did, opts) as? [CGDisplayMode] ?? []).filter { $0.isUsableForDesktopGUI() && $0.width == w && $0.height == h }
+            guard let mode = all.max(by: { $0.pixelWidth < $1.pixelWidth }) else { return }
+            var cfg: CGDisplayConfigRef?
+            guard CGBeginDisplayConfiguration(&cfg) == .success, let cfg else { return }
+            CGConfigureDisplayWithDisplayMode(cfg, did, mode, nil)
+            CGCompleteDisplayConfiguration(cfg, .forSession)
+        }
+        refreshDisplays()
+        hud("\(w)×\(h)")
+    }
+
+    func setOrientation(_ id: String, _ o: PanelOrientation) async { await rotate(id, o) }
+
     // MARK: virtual displays
 
     func addVirtual() async {
@@ -275,12 +341,13 @@ final class HostController: ObservableObject {
         hud("Ekran \(p.desktopIndex) kaldırıldı")
     }
 
-    private func rotate(_ id: String, _ o: PanelOrientation) async {
+    fileprivate func rotate(_ id: String, _ o: PanelOrientation) async {
         guard let i = panels.firstIndex(where: { $0.id == id }) else { return }
         guard panels[i].kind == .virtual, let vd = virtuals[id], let s = registry.get(UInt8(panels[i].streamId)) else {
             hud("Ana ekran döndürülemez"); return
         }
-        let (w, h) = o == .landscape ? (1920, 1080) : (1080, 1920)
+        let cur = CGSize(width: vd.width, height: vd.height)
+        let (w, h) = (o == .portrait) == (cur.height > cur.width) ? (Int(cur.width), Int(cur.height)) : (Int(cur.height), Int(cur.width))
         guard vd.setMode(width: w, height: h) else { hud("Döndürülemedi"); return }
         do { try await s.restart(width: w, height: h) } catch { lastError = error.localizedDescription; return }
         panels[i].orientation = o; panels[i].aspect = Double(w) / Double(h)

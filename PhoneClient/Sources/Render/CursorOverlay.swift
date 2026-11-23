@@ -66,6 +66,8 @@ final class CursorOverlay: @unchecked Sendable {
         let sq = CGSize(width: 160, height: 160)
         put("bar") { Self.glass(size: CGSize(width: 480, height: 72), symbol: nil, hot: $0, radiusFactor: 0.5, grabber: true) }
         put("corner") { Self.glass(size: sq, symbol: "arrow.up.left.and.arrow.down.right", hot: $0) }
+        put("magnet") { Self.glassMagnet(size: sq, hot: $0, on: false) }
+        put("magnetOn") { Self.glassMagnet(size: sq, hot: $0, on: true) }
         put("corner2") { Self.glass(size: sq, symbol: "arrow.up.right.and.arrow.down.left", hot: $0) }
         put("tilt") { Self.glass(size: sq, symbol: "angle", hot: $0) }
         put("rotate") { Self.glass(size: sq, symbol: "rotate.right", hot: $0) }
@@ -78,7 +80,7 @@ final class CursorOverlay: @unchecked Sendable {
                                   UIColor(red: 0.0, green: 0.85, blue: 0.25, alpha: 1), UIColor(red: 0.1, green: 0.9, blue: 1, alpha: 1),
                                   UIColor(red: 0.78, green: 0.5, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1)]
         for (i, c) in colors.enumerated() { put("c\(i)") { Self.glassDot(size: sq, color: c, hot: $0) } }
-        return out.count >= 2 * (9 + colors.count) ? Handles(tex: out) : nil
+        return out.count >= 2 * (11 + colors.count) ? Handles(tex: out) : nil
     }()
 
     private static func glass(size: CGSize, symbol: String?, hot: Bool, radiusFactor: CGFloat = 0.34, grabber: Bool = false) -> UIImage {
@@ -107,6 +109,32 @@ final class CursorOverlay: @unchecked Sendable {
                 .withTintColor(.white, renderingMode: .alwaysOriginal) {
                 c.setShadow(offset: CGSize(width: 0, height: 2), blur: 4, color: UIColor(white: 0, alpha: 0.5).cgColor)
                 img.draw(at: CGPoint(x: (size.width - img.size.width) / 2, y: (size.height - img.size.height) / 2))
+            }
+        }
+    }
+
+    /// Glass button with a horseshoe magnet (red/white tips); `on` = joined or armed (green ring).
+    private static func glassMagnet(size: CGSize, hot: Bool, on: Bool) -> UIImage {
+        let base = glass(size: size, symbol: nil, hot: hot || on, radiusFactor: 0.5)
+        return UIGraphicsImageRenderer(size: size).image { r in
+            base.draw(at: .zero)
+            let c = r.cgContext
+            let cx = size.width / 2, cy = size.height * 0.46, rad = size.width * 0.21
+            c.setLineCap(.butt)
+            let u = UIBezierPath()
+            u.move(to: CGPoint(x: cx - rad, y: cy + rad * 0.9)); u.addLine(to: CGPoint(x: cx - rad, y: cy))
+            u.addArc(withCenter: CGPoint(x: cx, y: cy), radius: rad, startAngle: .pi, endAngle: 0, clockwise: true)
+            u.addLine(to: CGPoint(x: cx + rad, y: cy + rad * 0.9))
+            u.lineWidth = size.width * 0.11
+            UIColor(white: 0.92, alpha: 1).setStroke(); u.stroke()
+            let tipH = size.width * 0.12, tw = size.width * 0.11
+            UIColor(red: 0.95, green: 0.2, blue: 0.2, alpha: 1).setFill()
+            UIBezierPath(rect: CGRect(x: cx - rad - tw / 2, y: cy + rad * 0.9 - tipH, width: tw, height: tipH)).fill()
+            UIColor(red: 0.3, green: 0.55, blue: 1, alpha: 1).setFill()
+            UIBezierPath(rect: CGRect(x: cx + rad - tw / 2, y: cy + rad * 0.9 - tipH, width: tw, height: tipH)).fill()
+            if on {
+                UIColor(red: 0.2, green: 0.9, blue: 0.4, alpha: 1).setStroke()
+                let ring = UIBezierPath(ovalIn: CGRect(origin: .zero, size: size).insetBy(dx: 7, dy: 7)); ring.lineWidth = 6; ring.stroke()
             }
         }
     }

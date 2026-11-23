@@ -56,6 +56,7 @@ final class StreamModel: ObservableObject {
         settings.onPanelChanged = { [weak self] id, t, w in
             self?.connection.send(.panelUpdate(PanelUpdate(panelId: id, transform: t, widthM: Double(w), curvature: 0)))
         }
+        settings.onMagnet = { [weak self] j in self?.connection.send(.magnet(j)) }
         settings.onRotate = { [weak self] id, o in self?.connection.send(.rotate(Rotate(panelId: id, orientation: o))) }
         settings.onRemoveDisplay = { [weak self] id in self?.connection.send(.removeDisplay(RemoveDisplay(panelId: id))) }
         settings.onAddDisplay = { [weak self] after in self?.connection.send(.addDisplay(AddDisplay(afterPanelId: after))) }

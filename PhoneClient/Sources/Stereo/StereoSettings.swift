@@ -46,6 +46,7 @@ final class StereoSettings: @unchecked Sendable {
     func takeCommands() -> [LayoutCommand] { lock.lock(); defer { lock.unlock() }; let c = _commands; _commands = []; return c }
     /// Called after the user stops adjusting the panel (debounced).
     var onPanelChanged: ((_ panelId: String, _ transform: [Float], _ widthM: Float) -> Void)?
+    var onMagnet: ((_ join: MagnetJoin) -> Void)?
     var onRotate: ((_ panelId: String, _ orientation: PanelOrientation) -> Void)?
     var onRemoveDisplay: ((_ panelId: String) -> Void)?
     func requestRecenter() { lock.lock(); _recenter = true; lock.unlock() }

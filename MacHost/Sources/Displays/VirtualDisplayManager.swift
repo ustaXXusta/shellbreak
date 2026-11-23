@@ -32,7 +32,7 @@ final class VirtualDisplayManager {
     static func create(name: String, width: Int, height: Int) -> VirtualDisplay? {
         let d = CGVirtualDisplayDescriptor()
         d.name = name
-        d.maxPixelsWide = UInt32(max(width, height)); d.maxPixelsHigh = UInt32(max(width, height))
+        d.maxPixelsWide = 3840; d.maxPixelsHigh = 3840   // any preset in either orientation
         d.sizeInMillimeters = CGSize(width: 508, height: 286)
         d.productID = 0x5342; d.vendorID = 0x5342
         serial += 1; d.serialNum = serial

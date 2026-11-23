@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import DesktopARShared
 
 /// One panel's capture → encode pipeline for a single display.
 final class PanelStream: @unchecked Sendable {
@@ -13,7 +14,7 @@ final class PanelStream: @unchecked Sendable {
 
     init(streamId: UInt8, displayID: CGDirectDisplayID, width: Int, height: Int) {
         self.streamId = streamId; self.displayID = displayID; self.width = width; self.height = height
-        encoder = VideoEncoder(width: width, height: height)
+        encoder = VideoEncoder(width: width, height: height, bitrate: DisplayResolutions.bitrate(width: width, height: height))
     }
 
     var isHEVC: Bool { encoder.isHEVC }
@@ -42,7 +43,7 @@ final class PanelStream: @unchecked Sendable {
         await stop()
         width = w; height = h
         let cb = onFrame
-        encoder = VideoEncoder(width: w, height: h)
+        encoder = VideoEncoder(width: w, height: h, bitrate: DisplayResolutions.bitrate(width: w, height: h))
         onFrame = cb
         try await start()
     }
