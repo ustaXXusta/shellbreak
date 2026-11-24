@@ -4,15 +4,18 @@ import simd
 
 /// Pure geometry for arranging macOS displays like physical monitors (rects in global display points).
 public enum DisplayLayout {
+    /// `ignored` displays (eye toggled off) are never snap targets but are still avoided so nothing overlaps.
     /// Place `moving` against the nearest edge of another display. It may slide freely along that edge
     /// (only the shared side is forced), snapping to flush/centre alignment when close, and never overlaps any display.
-    public static func snapped(moving: CGRect, others: [CGRect]) -> CGRect? {
+    public static func snapped(moving: CGRect, others: [CGRect], ignored: [CGRect] = []) -> CGRect? {
+        if others.isEmpty && ignored.isEmpty { return moving }
         if others.isEmpty { return moving }
+        let blockers = others + ignored
         var best: CGRect?
         var bestDist = CGFloat.greatestFiniteMagnitude
         let slack: CGFloat = 8, snapRange: CGFloat = 60
         func consider(_ c: CGRect) {
-            guard !others.contains(where: { $0.intersects(c.insetBy(dx: 1, dy: 1)) }) else { return }
+            guard !blockers.contains(where: { $0.intersects(c.insetBy(dx: 1, dy: 1)) }) else { return }
             let d = hypot(c.minX - moving.minX, c.minY - moving.minY)
             if d < bestDist { bestDist = d; best = c }
         }

@@ -27,13 +27,22 @@ struct DisplayArrangementView: View {
                         .fill(d.isPanel ? Color.accentColor.opacity(0.55) : Color.gray.opacity(0.5))
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(d.isMain ? 0.9 : 0.4), lineWidth: d.isMain ? 2 : 1))
                         .overlay(Text(d.name).font(.system(size: 9, weight: .semibold)).foregroundStyle(.white))
+                        .overlay(alignment: .topTrailing) {
+                            if !d.isPanel {
+                                Button { host.toggleExcluded(d.id) } label: {
+                                    Image(systemName: d.excluded ? "eye.slash" : "eye").font(.system(size: 10)).padding(3)
+                                        .background(Circle().fill(.black.opacity(0.5))).foregroundStyle(.white)
+                                }.buttonStyle(.plain).help("Düzene dahil et / etme")
+                            }
+                        }
+                        .opacity(d.excluded ? 0.6 : 1)
                         .frame(width: d.bounds.width * scale, height: d.bounds.height * scale)
                         .offset(x: (d.bounds.minX - u.minX) * scale + off.width, y: (d.bounds.minY - u.minY) * scale + off.height)
                         .gesture(DragGesture()
-                            .onChanged { v in if !d.isMain { drag[d.id] = v.translation } }
+                            .onChanged { v in if !d.isMain && !d.excluded { drag[d.id] = v.translation } }
                             .onEnded { v in
                                 drag[d.id] = nil
-                                guard !d.isMain else { return }
+                                guard !d.isMain && !d.excluded else { return }
                                 host.moveDisplay(d.id, to: d.bounds.offsetBy(dx: v.translation.width / scale, dy: v.translation.height / scale))
                             })
                 }
@@ -41,6 +50,7 @@ struct DisplayArrangementView: View {
             .frame(width: canvas.width, height: canvas.height)
             HStack {
                 Button("Odadaki sıraya diz") { host.arrangeRow() }
+                Button("Tanımla") { host.identifyDisplays() }
                 Button("Yenile") { host.refreshDisplays() }
             }
             Text("Ekranları sürükle: kenarları birleşince fare ve pencereler bir ekrandan diğerine geçer.")

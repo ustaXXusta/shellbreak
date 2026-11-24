@@ -88,8 +88,17 @@ public struct EnterScreen: Codable, Equatable {
 /// (edges: 0 left, 1 right, 2 top, 3 bottom).
 public struct MagnetJoin: Codable, Equatable {
     public var panelA: String; public var edgeA: Int; public var panelB: String; public var edgeB: Int
-    public init(panelA: String, edgeA: Int, panelB: String, edgeB: Int) {
-        self.panelA = panelA; self.edgeA = edgeA; self.panelB = panelB; self.edgeB = edgeB
+    /// Offset of B along A's edge (metres, +Y / +X in A's frame); non-zero when B joined the merged edge of a stacked pair.
+    public var slide: Double
+    public init(panelA: String, edgeA: Int, panelB: String, edgeB: Int, slide: Double = 0) {
+        self.panelA = panelA; self.edgeA = edgeA; self.panelB = panelB; self.edgeB = edgeB; self.slide = slide
+    }
+    private enum CodingKeys: String, CodingKey { case panelA, edgeA, panelB, edgeB, slide }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        panelA = try c.decode(String.self, forKey: .panelA); edgeA = try c.decode(Int.self, forKey: .edgeA)
+        panelB = try c.decode(String.self, forKey: .panelB); edgeB = try c.decode(Int.self, forKey: .edgeB)
+        slide = try c.decodeIfPresent(Double.self, forKey: .slide) ?? 0
     }
 }
 public struct CursorState: Codable, Equatable {

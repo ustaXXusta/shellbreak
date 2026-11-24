@@ -26,6 +26,19 @@ final class MagnetMathTests: XCTestCase {
         XCTAssertEqual(MagnetMath.displayOrigin(a: r, bSize: CGSize(width: 1920, height: 1080), edgeA: 2), CGPoint(x: 0, y: -1080))
         XCTAssertEqual(MagnetMath.displayOrigin(a: r, bSize: CGSize(width: 1920, height: 1080), edgeA: 3), CGPoint(x: 0, y: 1080))
     }
+    func testGroupMagnetOnStackedPair() {
+        // B (1 m tall) above A (1 m tall), same width: the merged side edge spans 2 m, its middle is 0.5 m above A's centre.
+        let g = MagnetMath.groupMagnets(aSize: SIMD2(2, 1), bSize: SIMD2(2, 1), jointEdge: 2)
+        XCTAssertEqual(g.count, 2)
+        XCTAssertEqual(g[0].edge, 0); XCTAssertEqual(g[1].edge, 1)
+        XCTAssertEqual(g[0].slide, 0.5)
+        XCTAssertTrue(MagnetMath.groupMagnets(aSize: SIMD2(2, 1), bSize: SIMD2(1, 1), jointEdge: 2).isEmpty)   // sides not collinear
+    }
+    func testSlideShiftsAlongEdge() {
+        let o = MagnetMath.centerOffset(aSize: SIMD2(2, 1), bSize: SIMD2(1, 1), edgeA: 1, slide: 0.5)
+        XCTAssertEqual(o, SIMD2(1.5, 0.5))
+        XCTAssertEqual(MagnetMath.displayOrigin(a: CGRect(x: 0, y: 0, width: 1920, height: 1080), bSize: CGSize(width: 1920, height: 1080), edgeA: 1, slidePoints: 540)?.y, -540)
+    }
     func testBendTurnsTowardHead() {
         // Panel faces +Z; head is above and in front → rotate about +X by -45° (top leans toward the head).
         let ang = MagnetMath.bendAngle(normal: SIMD3(0, 0, 1), toHead: simd_normalize(SIMD3(0, 1, 1)), axis: SIMD3(1, 0, 0), factor: 1)

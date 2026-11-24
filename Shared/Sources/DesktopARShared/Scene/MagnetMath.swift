@@ -8,48 +8,72 @@ public enum MagnetMath {
     public static func opposite(_ edge: Int) -> Int { edge ^ 1 }
     public static func isValid(_ edge: Int) -> Bool { (0..<4).contains(edge) }
 
-    /// Centre of B in A's local frame (metres), B sitting flush against A's `edgeA`, centred on it.
-    public static func centerOffset(aSize: SIMD2<Float>, bSize: SIMD2<Float>, edgeA: Int) -> SIMD2<Float>? {
+    /// Centre of B in A's local frame (metres), B sitting flush against A's `edgeA`; centred on the edge unless `slide`
+    /// moves it along the edge.
+    public static func centerOffset(aSize: SIMD2<Float>, bSize: SIMD2<Float>, edgeA: Int, slide: Float = 0) -> SIMD2<Float>? {
         switch edgeA {
-        case 0: return SIMD2(-(aSize.x + bSize.x) / 2, 0)
-        case 1: return SIMD2((aSize.x + bSize.x) / 2, 0)
-        case 2: return SIMD2(0, (aSize.y + bSize.y) / 2)
-        case 3: return SIMD2(0, -(aSize.y + bSize.y) / 2)
+        case 0: return SIMD2(-(aSize.x + bSize.x) / 2, slide)
+        case 1: return SIMD2((aSize.x + bSize.x) / 2, slide)
+        case 2: return SIMD2(slide, (aSize.y + bSize.y) / 2)
+        case 3: return SIMD2(slide, -(aSize.y + bSize.y) / 2)
         default: return nil
         }
     }
 
     /// Midpoint of the shared edge in A's local frame, and the hinge axis direction (unit, in A's local frame).
-    public static func hinge(aSize: SIMD2<Float>, edgeA: Int) -> (point: SIMD2<Float>, axis: SIMD3<Float>)? {
+    public static func hinge(aSize: SIMD2<Float>, edgeA: Int, slide: Float = 0) -> (point: SIMD2<Float>, axis: SIMD3<Float>)? {
         switch edgeA {
-        case 0: return (SIMD2(-aSize.x / 2, 0), SIMD3(0, 1, 0))
-        case 1: return (SIMD2(aSize.x / 2, 0), SIMD3(0, 1, 0))
-        case 2: return (SIMD2(0, aSize.y / 2), SIMD3(1, 0, 0))
-        case 3: return (SIMD2(0, -aSize.y / 2), SIMD3(1, 0, 0))
+        case 0: return (SIMD2(-aSize.x / 2, slide), SIMD3(0, 1, 0))
+        case 1: return (SIMD2(aSize.x / 2, slide), SIMD3(0, 1, 0))
+        case 2: return (SIMD2(slide, aSize.y / 2), SIMD3(1, 0, 0))
+        case 3: return (SIMD2(slide, -aSize.y / 2), SIMD3(1, 0, 0))
         default: return nil
         }
     }
 
     /// Thin rectangle along the shared edge in A's local frame (where the break "X" appears).
-    public static func seam(aSize: SIMD2<Float>, bSize: SIMD2<Float>, edgeA: Int, thickness: Float = 0.16) -> LocalRect? {
-        guard let off = centerOffset(aSize: aSize, bSize: bSize, edgeA: edgeA) else { return nil }
+    public static func seam(aSize: SIMD2<Float>, bSize: SIMD2<Float>, edgeA: Int, slide: Float = 0, thickness: Float = 0.16) -> LocalRect? {
+        guard centerOffset(aSize: aSize, bSize: bSize, edgeA: edgeA) != nil else { return nil }
         switch edgeA {
         case 0, 1:
-            let len = min(aSize.y, bSize.y)
-            return LocalRect(cx: edgeA == 1 ? aSize.x / 2 : -aSize.x / 2, cy: off.y, w: thickness, h: len)
+            let lo = max(-aSize.y / 2, slide - bSize.y / 2), hi = min(aSize.y / 2, slide + bSize.y / 2)
+            guard hi > lo else { return nil }
+            return LocalRect(cx: edgeA == 1 ? aSize.x / 2 : -aSize.x / 2, cy: (lo + hi) / 2, w: thickness, h: hi - lo)
         default:
-            let len = min(aSize.x, bSize.x)
-            return LocalRect(cx: off.x, cy: edgeA == 2 ? aSize.y / 2 : -aSize.y / 2, w: len, h: thickness)
+            let lo = max(-aSize.x / 2, slide - bSize.x / 2), hi = min(aSize.x / 2, slide + bSize.x / 2)
+            guard hi > lo else { return nil }
+            return LocalRect(cx: (lo + hi) / 2, cy: edgeA == 2 ? aSize.y / 2 : -aSize.y / 2, w: hi - lo, h: thickness)
         }
     }
 
-    /// Where B's display goes in macOS coordinates (y down) so it touches A's display on `edgeA`, centred.
-    public static func displayOrigin(a: CGRect, bSize: CGSize, edgeA: Int) -> CGPoint? {
+    /// A merged-edge magnet: for a pair joined across `jointEdge` whose perpendicular sides line up (same width for a
+    /// stacked pair, same height for a side-by-side pair), the two collinear sides count as one edge.
+    public struct GroupMagnet: Equatable { public var edge: Int; public var slide: Float; public var rect: LocalRect }
+    public static func groupMagnets(aSize: SIMD2<Float>, bSize: SIMD2<Float>, jointEdge: Int) -> [GroupMagnet] {
+        let tol: Float = 0.02
+        switch jointEdge {
+        case 2, 3:   // B above / below A → left and right sides merge
+            guard abs(aSize.x - bSize.x) < tol else { return [] }
+            let s = (jointEdge == 2 ? 1 : -1) * bSize.y / 2
+            return [GroupMagnet(edge: 0, slide: s, rect: LocalRect(cx: -(aSize.x / 2 + 0.09), cy: s, w: 0.07, h: 0.07)),
+                    GroupMagnet(edge: 1, slide: s, rect: LocalRect(cx: aSize.x / 2 + 0.09, cy: s, w: 0.07, h: 0.07))]
+        case 0, 1:   // B left / right of A → top and bottom sides merge
+            guard abs(aSize.y - bSize.y) < tol else { return [] }
+            let s = (jointEdge == 1 ? 1 : -1) * bSize.x / 2
+            return [GroupMagnet(edge: 2, slide: s, rect: LocalRect(cx: s, cy: aSize.y / 2 + 0.2, w: 0.07, h: 0.07)),
+                    GroupMagnet(edge: 3, slide: s, rect: LocalRect(cx: s, cy: -(aSize.y / 2 + 0.15), w: 0.07, h: 0.07))]
+        default: return []
+        }
+    }
+
+    /// Where B's display goes in macOS coordinates (y down) so it touches A's display on `edgeA`, centred
+    /// (`slidePoints` shifts it along the edge in display points; positive = up / right in the room's frame).
+    public static func displayOrigin(a: CGRect, bSize: CGSize, edgeA: Int, slidePoints: CGFloat = 0) -> CGPoint? {
         switch edgeA {
-        case 0: return CGPoint(x: a.minX - bSize.width, y: a.midY - bSize.height / 2)
-        case 1: return CGPoint(x: a.maxX, y: a.midY - bSize.height / 2)
-        case 2: return CGPoint(x: a.midX - bSize.width / 2, y: a.minY - bSize.height)
-        case 3: return CGPoint(x: a.midX - bSize.width / 2, y: a.maxY)
+        case 0: return CGPoint(x: a.minX - bSize.width, y: a.midY - bSize.height / 2 - slidePoints)
+        case 1: return CGPoint(x: a.maxX, y: a.midY - bSize.height / 2 - slidePoints)
+        case 2: return CGPoint(x: a.midX - bSize.width / 2 + slidePoints, y: a.minY - bSize.height)
+        case 3: return CGPoint(x: a.midX - bSize.width / 2 + slidePoints, y: a.maxY)
         default: return nil
         }
     }

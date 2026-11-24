@@ -34,6 +34,14 @@ final class DisplayLayoutTests: XCTestCase {
         XCTAssertNotNil(s)
         XCTAssertFalse(s!.intersects(top.insetBy(dx: 1, dy: 1)) || s!.intersects(bottom.insetBy(dx: 1, dy: 1)))
     }
+    func testIgnoredDisplayIsAvoidedButNotSnappedTo() {
+        let ignored = CGRect(x: 1440, y: 0, width: 1920, height: 1080)
+        // Dropped on the ignored monitor: lands against the main display on the far side, never overlapping it.
+        let s = DisplayLayout.snapped(moving: CGRect(x: 1600, y: 100, width: 1920, height: 1080), others: [main], ignored: [ignored])
+        XCTAssertNotNil(s)
+        XCTAssertFalse(s!.intersects(ignored.insetBy(dx: 1, dy: 1)))
+        XCTAssertFalse(s!.intersects(main.insetBy(dx: 1, dy: 1)))
+    }
     func testRowKeepsAnchorAtOrigin() {
         let o = DisplayLayout.row(sizes: [CGSize(width: 1920, height: 1080), CGSize(width: 1440, height: 900), CGSize(width: 1080, height: 1920)], anchor: 1)
         XCTAssertEqual(o[1], .zero)
@@ -58,5 +66,6 @@ final class DisplayResolutionsTests: XCTestCase {
         XCTAssertEqual(DisplayResolutions.bitrate(width: 1920, height: 1080), 15_000_000)
         XCTAssertEqual(DisplayResolutions.bitrate(width: 3840, height: 2160), 40_000_000)
         XCTAssertEqual(DisplayResolutions.bitrate(width: 1280, height: 720), 6_666_666)
+        XCTAssertEqual(DisplayResolutions.bitrate(width: 640, height: 360), 6_000_000)   // floor
     }
 }

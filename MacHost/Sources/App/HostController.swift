@@ -29,6 +29,8 @@ struct DisplayItem: Identifiable, Equatable {
     var bounds: CGRect
     var isMain: Bool
     var isPanel: Bool
+    var key: String
+    var excluded: Bool
 }
 
 /// Thread-safe streamId → pipeline lookup for callbacks that run off the main actor.
@@ -53,6 +55,8 @@ final class HostController: ObservableObject {
     @Published var lastError: String?
     @Published var panels: [PanelModel] = []
     @Published var displays: [DisplayItem] = []
+    /// Physical monitors the user switched off in the arrangement editor (eye): never snapped to or moved by us.
+    @Published var excludedKeys: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "excludedDisplays") ?? [])
     @Published var panelWidthM: Double = {
         let v = UserDefaults.standard.double(forKey: "panelWidthM"); return v > 0 ? v : 2.0
     }() { didSet {
@@ -191,9 +195,18 @@ final class HostController: ObservableObject {
         let next = ids.map { id -> DisplayItem in
             let panel = panels.first { $0.displayID == id }
             let name = panel.map { $0.kind == .mirror ? "Ana ekran" : "Ekran \($0.desktopIndex)" } ?? (CGDisplayIsBuiltin(id) != 0 ? "Dahili" : "Harici")
-            return DisplayItem(id: id, name: name, bounds: CGDisplayBounds(id), isMain: id == CGMainDisplayID(), isPanel: panel != nil)
+            let key = "\(CGDisplayVendorNumber(id))-\(CGDisplayModelNumber(id))-\(CGDisplaySerialNumber(id))"
+            return DisplayItem(id: id, name: name, bounds: CGDisplayBounds(id), isMain: id == CGMainDisplayID(), isPanel: panel != nil,
+                               key: key, excluded: panel == nil && excludedKeys.contains(key))
         }
         if next != displays { displays = next }
+    }
+
+    func toggleExcluded(_ id: CGDirectDisplayID) {
+        guard let d = displays.first(where: { $0.id == id }), !d.isPanel else { return }
+        if excludedKeys.contains(d.key) { excludedKeys.remove(d.key) } else { excludedKeys.insert(d.key) }
+        UserDefaults.standard.set(Array(excludedKeys), forKey: "excludedDisplays")
+        refreshDisplays()
     }
 
     private func applyOrigins(_ origins: [CGDirectDisplayID: CGPoint]) {
@@ -207,8 +220,9 @@ final class HostController: ObservableObject {
     /// Drop a display at `rect` (global points); it snaps to touch another display without overlapping.
     func moveDisplay(_ id: CGDirectDisplayID, to rect: CGRect) {
         guard id != CGMainDisplayID() else { return }
-        let others = displays.filter { $0.id != id }.map(\.bounds)
-        guard let r = DisplayLayout.snapped(moving: rect, others: others) else { return }
+        let others = displays.filter { $0.id != id && !$0.excluded }.map(\.bounds)
+        let ignored = displays.filter { $0.id != id && $0.excluded }.map(\.bounds)
+        guard let r = DisplayLayout.snapped(moving: rect, others: others, ignored: ignored) else { return }
         applyOrigins([id: r.origin])
     }
 
@@ -231,7 +245,7 @@ final class HostController: ObservableObject {
         for (i, p) in ordered.enumerated() { origins[p.displayID] = o[i] }
         var x: CGFloat = 0
         let below = sizes.map(\.height).max() ?? 900
-        for d in displays where !d.isPanel { origins[d.id] = CGPoint(x: x, y: below); x += d.bounds.width }
+        for d in displays where !d.isPanel && !d.excluded { origins[d.id] = CGPoint(x: x, y: below); x += d.bounds.width }
         applyOrigins(origins)
         hud("Ekranlar odadaki sıraya göre dizildi")
     }
@@ -247,7 +261,9 @@ final class HostController: ObservableObject {
         let moveB = !db.isMain
         let base = moveB ? da : db, mover = moveB ? db : da
         let edge = moveB ? m.edgeA : MagnetMath.opposite(m.edgeA)
-        guard let origin = MagnetMath.displayOrigin(a: base.bounds, bSize: mover.bounds.size, edgeA: edge) else { return }
+        let basePanel = moveB ? pa : pb
+        let slidePts = CGFloat(moveB ? m.slide : -m.slide) * base.bounds.width / CGFloat(max(basePanel.widthM, 0.1))
+        guard let origin = MagnetMath.displayOrigin(a: base.bounds, bSize: mover.bounds.size, edgeA: edge, slidePoints: slidePts) else { return }
         var origins: [CGDirectDisplayID: CGPoint] = [mover.id: origin]
         let rect = CGRect(origin: origin, size: mover.bounds.size)
         var next = max(displays.map { $0.bounds.maxX }.max() ?? 0, rect.maxX)
@@ -262,7 +278,7 @@ final class HostController: ObservableObject {
 
     func resolutionOptions(for p: PanelModel) -> [CGSize] {
         if p.kind == .virtual { return DisplayResolutions.presets(portrait: p.orientation == .portrait) }
-        let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false] as CFDictionary
+        let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false, "kCGDisplayShowDuplicateLowResolutionModes" as CFString: true] as CFDictionary
         let modes = (CGDisplayCopyAllDisplayModes(p.displayID, opts) as? [CGDisplayMode] ?? []).filter { $0.isUsableForDesktopGUI() }
         var seen = Set<String>(), out: [CGSize] = []
         for m in modes.sorted(by: { $0.width < $1.width }) where seen.insert("\(m.width)x\(m.height)").inserted {
@@ -287,7 +303,7 @@ final class HostController: ObservableObject {
             sendScene()
         } else {
             let did = panels[i].displayID
-            let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false] as CFDictionary
+            let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false, "kCGDisplayShowDuplicateLowResolutionModes" as CFString: true] as CFDictionary
             let all = (CGDisplayCopyAllDisplayModes(did, opts) as? [CGDisplayMode] ?? []).filter { $0.isUsableForDesktopGUI() && $0.width == w && $0.height == h }
             guard let mode = all.max(by: { $0.pixelWidth < $1.pixelWidth }) else { return }
             var cfg: CGDisplayConfigRef?
@@ -300,6 +316,37 @@ final class HostController: ObservableObject {
     }
 
     func setOrientation(_ id: String, _ o: PanelOrientation) async { await rotate(id, o) }
+
+    // MARK: identify
+
+    private var identifyWindows: [NSWindow] = []
+
+    /// Shows each display's name in its bottom-right corner for two seconds.
+    func identifyDisplays() {
+        identifyWindows.forEach { $0.close() }
+        identifyWindows = []
+        refreshDisplays()
+        for d in displays {
+            guard let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == d.id }) else { continue }
+            let label = d.name
+            let size = NSSize(width: 360, height: 120)
+            let frame = NSRect(x: screen.frame.maxX - size.width - 40, y: screen.frame.minY + 40, width: size.width, height: size.height)
+            let w = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+            w.isOpaque = false; w.backgroundColor = .clear; w.level = .screenSaver; w.ignoresMouseEvents = true
+            w.isReleasedWhenClosed = false; w.collectionBehavior = [.canJoinAllSpaces, .stationary]
+            w.contentView = NSHostingView(rootView: Text(label)
+                .font(.system(size: 44, weight: .bold, design: .rounded)).foregroundStyle(.white)
+                .frame(width: size.width, height: size.height)
+                .background(RoundedRectangle(cornerRadius: 22).fill(.black.opacity(0.78)))
+                .overlay(RoundedRectangle(cornerRadius: 22).stroke(.white.opacity(0.5), lineWidth: 2)))
+            w.orderFrontRegardless()
+            identifyWindows.append(w)
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            self?.identifyWindows.forEach { $0.close() }; self?.identifyWindows = []
+        }
+    }
 
     // MARK: virtual displays
 
