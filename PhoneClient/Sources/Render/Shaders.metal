@@ -14,6 +14,19 @@ fragment float4 quadFragment(VOut in [[stage_in]], texture2d<float> tex [[textur
     return tex.sample(s, in.uv);
 }
 
+// Panel pictures: when the panel covers fewer screen pixels than the video has, average the covered area (screen-space
+// derivatives pick the footprint) so small text stays readable instead of shimmering.
+fragment float4 panelFragment(VOut in [[stage_in]], texture2d<float> tex [[texture(0)]]) {
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float2 dx = dfdx(in.uv) * 0.3, dy = dfdy(in.uv) * 0.3;
+    float4 c = tex.sample(s, in.uv) * 0.36;
+    c += tex.sample(s, in.uv + dx + dy) * 0.16;
+    c += tex.sample(s, in.uv - dx + dy) * 0.16;
+    c += tex.sample(s, in.uv + dx - dy) * 0.16;
+    c += tex.sample(s, in.uv - dx - dy) * 0.16;
+    return c;
+}
+
 // ---------------------------------------------------------------- F3 stereo
 
 struct PanelUniforms { float4x4 mvp; float2 halfSize; };
@@ -981,7 +994,6 @@ static float3 photoTheme(float3 d, float t, int th, texture2d<float> env) {
         break;
     }
     }
-    c = cafeTable(d, t, th, c);
     return c;
 }
 

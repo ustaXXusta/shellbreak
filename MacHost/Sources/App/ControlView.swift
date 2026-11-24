@@ -27,6 +27,10 @@ struct ControlView: View {
                 Text(host.streaming ? "Yayın: \(host.codecName)" : "Yayın kapalı")
                 if let e = host.lastError { Text("Hata: \(e)") }
                 Divider()
+                Picker("Görüntü kalitesi", selection: $host.quality) {
+                    ForEach(StreamQuality.allCases, id: \.self) { Text($0.label).tag($0) }
+                }.pickerStyle(.segmented)
+                Text("Yüksek/Çok yüksek: HiDPI sanal ekran + büyük yakalama. Mac ve bağlantıyı daha çok yorar.").font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Text("Ekranlar").font(.headline)
                 ForEach(host.panels) { p in
                     VStack(alignment: .leading, spacing: 3) {
@@ -100,15 +104,14 @@ struct ControlView: View {
 struct ResolutionPicker: View {
     @ObservedObject var host: HostController
     let panel: PanelModel
-    private func key(_ s: CGSize) -> String { "\(Int(s.width))x\(Int(s.height))" }
     var body: some View {
         let options = host.resolutionOptions(for: panel)
-        let cur = host.currentResolution(panel)
-        let all = options.contains(where: { key($0) == key(cur) }) ? options : [cur] + options
-        Picker("Çözünürlük", selection: Binding(get: { key(cur) }, set: { k in
-            if let n = all.first(where: { key($0) == k }) { Task { await host.setResolution(panel.id, n) } }
+        let cur = host.currentResolutionID(panel)
+        Picker("Çözünürlük", selection: Binding(get: { cur }, set: { k in
+            if let o = options.first(where: { $0.id == k }) { Task { await host.setResolution(panel.id, option: o) } }
         })) {
-            ForEach(all.map(key), id: \.self) { k in Text(k.replacingOccurrences(of: "x", with: " × ")).tag(k) }
+            if !options.contains(where: { $0.id == cur }) { Text("Geçerli").tag(cur) }
+            ForEach(options) { o in Text(o.label).tag(o.id) }
         }
         .font(.caption)
     }

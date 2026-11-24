@@ -13,8 +13,8 @@ public enum DisplayResolutions {
     public static func presets(portrait: Bool) -> [CGSize] {
         portrait ? landscape.map { CGSize(width: $0.height, height: $0.width) } : landscape
     }
-    /// Encoder bitrate that grows with the pixel count (15 Mbps at 1080p, capped at 40).
+    /// Encoder bitrate that grows with the pixel count (20 Mbps at 1080p, between 8 and 60 Mbps) — desktop text needs the headroom.
     public static func bitrate(width: Int, height: Int) -> Int {
-        min(40_000_000, max(6_000_000, Int(15_000_000 * Double(width * height) / (1920.0 * 1080.0))))
+        min(60_000_000, max(8_000_000, Int(20_000_000 * Double(width * height) / (1920.0 * 1080.0))))
     }
 }

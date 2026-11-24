@@ -63,9 +63,9 @@ final class DisplayResolutionsTests: XCTestCase {
         XCTAssertTrue(p.contains(CGSize(width: 1080, height: 1920)))
     }
     func testBitrateScalesAndCaps() {
-        XCTAssertEqual(DisplayResolutions.bitrate(width: 1920, height: 1080), 15_000_000)
-        XCTAssertEqual(DisplayResolutions.bitrate(width: 3840, height: 2160), 40_000_000)
-        XCTAssertEqual(DisplayResolutions.bitrate(width: 1280, height: 720), 6_666_666)
-        XCTAssertEqual(DisplayResolutions.bitrate(width: 640, height: 360), 6_000_000)   // floor
+        XCTAssertEqual(DisplayResolutions.bitrate(width: 1920, height: 1080), 20_000_000)
+        XCTAssertEqual(DisplayResolutions.bitrate(width: 3840, height: 2160), 60_000_000)   // capped
+        XCTAssertEqual(DisplayResolutions.bitrate(width: 2560, height: 1600), 39_506_172)
+        XCTAssertEqual(DisplayResolutions.bitrate(width: 640, height: 360), 8_000_000)      // floor
     }
 }

@@ -33,6 +33,22 @@ struct DisplayItem: Identifiable, Equatable {
     var excluded: Bool
 }
 
+/// How much detail the streams carry. Higher = HiDPI virtual displays captured at a larger size + native-size mirror.
+enum StreamQuality: String, CaseIterable {
+    case normal, high, ultra
+    var label: String { switch self { case .normal: "Normal"; case .high: "Yüksek"; case .ultra: "Çok yüksek" } }
+    var factor: CGFloat { switch self { case .normal: 1; case .high: 1.5; case .ultra: 2 } }
+    var hiDPI: Bool { self != .normal }
+}
+
+/// A choice in the resolution picker (system modes for the main display, presets for virtual ones).
+struct ResolutionOption: Identifiable, Equatable {
+    var id: String
+    var label: String
+    var size: CGSize
+    var systemMode: SystemDisplayMode?
+}
+
 /// Thread-safe streamId → pipeline lookup for callbacks that run off the main actor.
 final class StreamRegistry: @unchecked Sendable {
     private let lock = NSLock()
@@ -54,6 +70,9 @@ final class HostController: ObservableObject {
     @Published var dumpToDesktop = false { didSet { updateDump() } }
     @Published var lastError: String?
     @Published var panels: [PanelModel] = []
+    @Published var quality: StreamQuality = StreamQuality(rawValue: UserDefaults.standard.string(forKey: "streamQuality") ?? "") ?? .high {
+        didSet { UserDefaults.standard.set(quality.rawValue, forKey: "streamQuality"); if streaming && oldValue != quality { Task { await applyQuality() } } }
+    }
     @Published var displays: [DisplayItem] = []
     /// Physical monitors the user switched off in the arrangement editor (eye): never snapped to or moved by us.
     @Published var excludedKeys: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "excludedDisplays") ?? [])
@@ -136,7 +155,8 @@ final class HostController: ObservableObject {
         if !permissions.screenRecording { _ = CGRequestScreenCaptureAccess(); lastError = "Screen Recording izni gerekli"; return }
         do {
             let id = CGMainDisplayID()
-            let mirror = PanelStream(streamId: 0, displayID: id, width: 1920, height: 1200)
+            let (mw, mh) = mirrorCaptureSize()
+            let mirror = PanelStream(streamId: 0, displayID: id, width: mw, height: mh)
             attach(mirror)
             server.onConnectionChange = { [weak self] up in
                 Task { @MainActor in
@@ -274,45 +294,81 @@ final class HostController: ObservableObject {
         hud("Ekranlar yapıştırıldı")
     }
 
+    // MARK: quality
+
+    private func even(_ v: CGFloat) -> Int { max(2, Int(v.rounded()) / 2 * 2) }
+    /// Capture size for a virtual display of `logical` points: scaled by the quality factor, never above 4K.
+    func captureSize(logical: CGSize) -> (Int, Int) {
+        var w = logical.width * quality.factor, h = logical.height * quality.factor
+        let k = min(1, 3840 / w, 2160 / h, 3840 / h, 2160 / w)    // either orientation stays within a 4K frame
+        w *= k; h *= k
+        return (even(w), even(h))
+    }
+    /// The built-in display's stream: native backing pixels (up to 2560×1600) on High/Ultra, 1920×1200 on Normal.
+    func mirrorCaptureSize() -> (Int, Int) {
+        let id = CGMainDisplayID()
+        guard quality != .normal, let m = CGDisplayCopyDisplayMode(id) else { return (1920, 1200) }
+        var w = CGFloat(m.pixelWidth), h = CGFloat(m.pixelHeight)
+        let k = min(1, 2560 / w, 1600 / h)
+        w *= k; h *= k
+        return (even(w), even(h))
+    }
+
+    func applyQuality() async {
+        for p in panels {
+            guard let s = registry.get(UInt8(p.streamId)) else { continue }
+            if p.kind == .virtual, let vd = virtuals[p.id] {
+                _ = vd.setMode(width: vd.width, height: vd.height, hiDPI: quality.hiDPI)
+                let (w, h) = captureSize(logical: CGSize(width: vd.width, height: vd.height))
+                try? await s.restart(width: w, height: h)
+            } else if p.kind == .mirror {
+                let (w, h) = mirrorCaptureSize()
+                try? await s.restart(width: w, height: h)
+            }
+        }
+        refreshDisplays()
+        hud("Kalite: \(quality.label)")
+    }
+
     // MARK: resolution / scale
 
-    func resolutionOptions(for p: PanelModel) -> [CGSize] {
-        if p.kind == .virtual { return DisplayResolutions.presets(portrait: p.orientation == .portrait) }
-        let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false, "kCGDisplayShowDuplicateLowResolutionModes" as CFString: true] as CFDictionary
-        let modes = (CGDisplayCopyAllDisplayModes(p.displayID, opts) as? [CGDisplayMode] ?? []).filter { $0.isUsableForDesktopGUI() }
-        var seen = Set<String>(), out: [CGSize] = []
-        for m in modes.sorted(by: { $0.width < $1.width }) where seen.insert("\(m.width)x\(m.height)").inserted {
-            out.append(CGSize(width: m.width, height: m.height))
+    func resolutionOptions(for p: PanelModel) -> [ResolutionOption] {
+        if p.kind == .virtual {
+            return DisplayResolutions.presets(portrait: p.orientation == .portrait).map {
+                ResolutionOption(id: "\(Int($0.width))x\(Int($0.height))", label: "\(Int($0.width)) × \(Int($0.height))", size: $0, systemMode: nil)
+            }
         }
-        return out
+        return SystemDisplayModes.list(p.displayID).map {
+            ResolutionOption(id: "m\($0.number)", label: $0.label, size: CGSize(width: $0.width, height: $0.height), systemMode: $0)
+        }
     }
 
-    func currentResolution(_ p: PanelModel) -> CGSize {
-        if p.kind == .virtual, let vd = virtuals[p.id] { return CGSize(width: vd.width, height: vd.height) }
-        return CGDisplayBounds(p.displayID).size
+    func currentResolutionID(_ p: PanelModel) -> String {
+        if p.kind == .virtual, let vd = virtuals[p.id] { return "\(vd.width)x\(vd.height)" }
+        if let m = SystemDisplayModes.current(p.displayID) { return "m\(m.number)" }
+        return ""
     }
 
-    func setResolution(_ id: String, _ size: CGSize) async {
+    func setResolution(_ id: String, option: ResolutionOption) async {
         guard let i = panels.firstIndex(where: { $0.id == id }) else { return }
-        let w = Int(size.width), h = Int(size.height)
         if panels[i].kind == .virtual {
-            guard let vd = virtuals[id], let s = registry.get(UInt8(panels[i].streamId)), vd.setMode(width: w, height: h) else { hud("Çözünürlük değişmedi"); return }
-            do { try await s.restart(width: w, height: h) } catch { lastError = error.localizedDescription; return }
+            let w = Int(option.size.width), h = Int(option.size.height)
+            guard let vd = virtuals[id], let s = registry.get(UInt8(panels[i].streamId)), vd.setMode(width: w, height: h, hiDPI: quality.hiDPI) else { hud("Çözünürlük değişmedi"); return }
+            let (cw, ch) = captureSize(logical: option.size)
+            do { try await s.restart(width: cw, height: ch) } catch { lastError = error.localizedDescription; return }
             panels[i].orientation = h > w ? .portrait : .landscape
             panels[i].aspect = Double(w) / Double(h)
             sendScene()
-        } else {
-            let did = panels[i].displayID
-            let opts = ["kCGDisplayShouldListDuplicateModes" as CFString: false, "kCGDisplayShowDuplicateLowResolutionModes" as CFString: true] as CFDictionary
-            let all = (CGDisplayCopyAllDisplayModes(did, opts) as? [CGDisplayMode] ?? []).filter { $0.isUsableForDesktopGUI() && $0.width == w && $0.height == h }
-            guard let mode = all.max(by: { $0.pixelWidth < $1.pixelWidth }) else { return }
-            var cfg: CGDisplayConfigRef?
-            guard CGBeginDisplayConfiguration(&cfg) == .success, let cfg else { return }
-            CGConfigureDisplayWithDisplayMode(cfg, did, mode, nil)
-            CGCompleteDisplayConfiguration(cfg, .forSession)
+        } else if let mode = option.systemMode {
+            guard SystemDisplayModes.set(panels[i].displayID, mode: mode) else { hud("Mod değiştirilemedi"); return }
+            try? await Task.sleep(nanoseconds: 900_000_000)          // the display needs a moment to settle
+            if let s = registry.get(UInt8(panels[i].streamId)) {
+                let (w, h) = mirrorCaptureSize()
+                try? await s.restart(width: w, height: h)
+            }
         }
         refreshDisplays()
-        hud("\(w)×\(h)")
+        hud(option.label)
     }
 
     func setOrientation(_ id: String, _ o: PanelOrientation) async { await rotate(id, o) }
@@ -356,11 +412,12 @@ final class HostController: ObservableObject {
         let index = (panels.map(\.desktopIndex).max() ?? 1) + 1
         let sid = UInt8(index - 1)
         hud("Yeni ekran oluşturuluyor…")
-        guard let vd = VirtualDisplayManager.create(name: "Shellbreak \(index)", width: 1920, height: 1080) else {
+        guard let vd = VirtualDisplayManager.create(name: "Shellbreak \(index)", width: 1920, height: 1080, hiDPI: quality.hiDPI) else {
             hud("Sanal ekran açılamadı"); lastError = "Sanal ekran oluşturulamadı"; return
         }
         VirtualDisplayManager.arrangeRight(vd.displayID)
-        let stream = PanelStream(streamId: sid, displayID: vd.displayID, width: 1920, height: 1080)
+        let (vw, vh) = captureSize(logical: CGSize(width: 1920, height: 1080))
+        let stream = PanelStream(streamId: sid, displayID: vd.displayID, width: vw, height: vh)
         attach(stream)
         do { try await stream.start() } catch {
             registry.remove(sid); hud("Yayın başlatılamadı"); lastError = error.localizedDescription; return
@@ -395,8 +452,9 @@ final class HostController: ObservableObject {
         }
         let cur = CGSize(width: vd.width, height: vd.height)
         let (w, h) = (o == .portrait) == (cur.height > cur.width) ? (Int(cur.width), Int(cur.height)) : (Int(cur.height), Int(cur.width))
-        guard vd.setMode(width: w, height: h) else { hud("Döndürülemedi"); return }
-        do { try await s.restart(width: w, height: h) } catch { lastError = error.localizedDescription; return }
+        guard vd.setMode(width: w, height: h, hiDPI: quality.hiDPI) else { hud("Döndürülemedi"); return }
+        let (cw, ch) = captureSize(logical: CGSize(width: w, height: h))
+        do { try await s.restart(width: cw, height: ch) } catch { lastError = error.localizedDescription; return }
         panels[i].orientation = o; panels[i].aspect = Double(w) / Double(h)
         sendScene()
         hud(o == .landscape ? "Yatay" : "Dikey")

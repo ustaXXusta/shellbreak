@@ -9,18 +9,20 @@ final class VirtualDisplay {
     private let display: CGVirtualDisplay
     private(set) var width: Int
     private(set) var height: Int
+    private(set) var hiDPI: Bool
 
-    fileprivate init(display: CGVirtualDisplay, width: Int, height: Int) {
-        self.display = display; self.displayID = display.displayID; self.width = width; self.height = height
+    fileprivate init(display: CGVirtualDisplay, width: Int, height: Int, hiDPI: Bool) {
+        self.display = display; self.displayID = display.displayID; self.width = width; self.height = height; self.hiDPI = hiDPI
     }
 
     /// Switch the display mode (landscape ↔ portrait).
-    func setMode(width w: Int, height h: Int) -> Bool {
+    /// `hiDPI` renders the desktop at twice the pixel density (same point size), so a larger capture is genuinely sharper.
+    func setMode(width w: Int, height h: Int, hiDPI hd: Bool) -> Bool {
         let s = CGVirtualDisplaySettings()
-        s.hiDPI = 0
+        s.hiDPI = hd ? 1 : 0
         s.modes = [CGVirtualDisplayMode(width: UInt32(w), height: UInt32(h), refreshRate: 60)]
         guard display.apply(s) else { return false }
-        width = w; height = h
+        width = w; height = h; hiDPI = hd
         return true
     }
 }
@@ -29,7 +31,7 @@ final class VirtualDisplayManager {
     private static let log = Logger(subsystem: "dev.desktopar.host", category: "displays")
     nonisolated(unsafe) private static var serial: UInt32 = 100
 
-    static func create(name: String, width: Int, height: Int) -> VirtualDisplay? {
+    static func create(name: String, width: Int, height: Int, hiDPI: Bool) -> VirtualDisplay? {
         let d = CGVirtualDisplayDescriptor()
         d.name = name
         d.maxPixelsWide = 3840; d.maxPixelsHigh = 3840   // any preset in either orientation
@@ -39,11 +41,11 @@ final class VirtualDisplayManager {
         d.queue = DispatchQueue.main
         let vd = CGVirtualDisplay(descriptor: d)
         let s = CGVirtualDisplaySettings()
-        s.hiDPI = 0
+        s.hiDPI = hiDPI ? 1 : 0
         s.modes = [CGVirtualDisplayMode(width: UInt32(width), height: UInt32(height), refreshRate: 60)]
         guard vd.apply(s), vd.displayID != 0 else { log.error("virtual display apply failed"); return nil }
         log.info("virtual display \(vd.displayID) \(width)x\(height)")
-        return VirtualDisplay(display: vd, width: width, height: height)
+        return VirtualDisplay(display: vd, width: width, height: height, hiDPI: hiDPI)
     }
 
     /// Put `displayID` directly to the right of every other active display (macOS cursor then flows left → right).
