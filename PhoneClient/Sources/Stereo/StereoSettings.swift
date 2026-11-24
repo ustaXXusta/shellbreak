@@ -32,7 +32,7 @@ final class StereoSettings: @unchecked Sendable {
     /// 0 = plain black, 1…8 = procedural world themes (only visible while the real world is darkened).
     var theme: Int {
         get { lock.lock(); defer { lock.unlock() }; return _theme }
-        set { lock.lock(); _theme = max(0, min(8, newValue)); lock.unlock(); UserDefaults.standard.set(max(0, min(8, newValue)), forKey: "theme.v1") }
+        set { lock.lock(); _theme = max(0, min(9, newValue)); lock.unlock(); UserDefaults.standard.set(max(0, min(9, newValue)), forKey: "theme.v1") }
     }
     var layoutActive: Bool {
         get { lock.lock(); defer { lock.unlock() }; return _layoutActive }

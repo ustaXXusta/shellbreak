@@ -47,7 +47,7 @@ public enum PanelHandleGeometry {
     }
 
     /// Theme colour circles in a row right above the theme button (index 0 = plain black).
-    public static let themeCount = 9
+    public static let themeCount = 10
     public static func themeCircles(width: Float, aspect: Float) -> [LocalRect] {
         let btn = buttons(width: width, aspect: aspect)[5]
         let d: Float = 0.05, step: Float = 0.062

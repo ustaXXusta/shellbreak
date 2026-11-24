@@ -129,32 +129,59 @@ static float rain(float a, float y, float t, float sc, float speed, float slant,
     return smoothstep(0.0, 0.03, yy) * smoothstep(0.22, 0.0, yy) * lane * step(0.45, h11(cell * 1.7 + seed * 3));
 }
 
-// ---- 1 lava lamp
-static float lavaField(float2 p, float t) {
-    float f = 0;
-    for (int i = 0; i < 12; i++) {
-        float fi = float(i), r = 0.2 + 0.1 * h11(fi + 3);
-        float2 c = float2((fi / 12.0) * 6.2832 - 3.1416 + 0.25 * sin(t * 0.21 + fi * 1.9), 1.15 * sin(t * (0.1 + 0.035 * h11(fi)) + fi * 2.7));
-        float2 q = float2(adiff(p.x, c.x), p.y - c.y); f += r * r / (dot(q, q) + 1e-3);
+// ---- 1 lava lamp: wax blobs ray-marched inside the lamp, yellow liquid around, a hot bulb below
+static float smin(float a, float b, float k) { float h = max(k - abs(a - b), 0.0) / k; return min(a, b) - h * h * k * 0.25; }
+static float lavaSDF(float3 p, float t) {
+    float dmin = 1e5;
+    for (int i = 0; i < 9; i++) {
+        float fi = float(i), hr = h11(fi + 3.0);
+        float ang = fi * 0.6981 + sin(t * 0.05 + fi) * 0.5;
+        float R = 2.5 + 0.6 * sin(fi * 1.7 + t * 0.07);
+        float y = 1.7 * sin(t * (0.11 + 0.04 * hr) + fi * 2.1);
+        float3 c = float3(R * sin(ang), y, -R * cos(ang));
+        float r = 0.55 + 0.3 * hr;
+        float3 q = p - c; q.y *= 0.82;                              // slightly tall blobs
+        float d = length(q) - r;
+        dmin = i == 0 ? d : smin(dmin, d, 0.9);
     }
-    f += 0.5 * exp(-(p.y + 1.25) * 3.5) + 0.5 * exp((p.y - 1.25) * 3.5);
-    return f;
+    dmin = smin(dmin, length(float3(p.x, (p.y + 3.1) * 1.8, p.z)) - 2.7, 1.1);   // pool at the bottom
+    dmin = smin(dmin, length(float3(p.x, (p.y - 3.1) * 1.8, p.z)) - 2.4, 1.1);   // and a cap on top
+    return dmin;
 }
-static float3 lavaTheme(float a, float y, float t) {
-    float2 p = float2(a, y * 1.5); float f = lavaField(p, t); float e = 0.02;
-    float2 g = float2(lavaField(p + float2(e, 0), t) - lavaField(p - float2(e, 0), t), lavaField(p + float2(0, e), t) - lavaField(p - float2(0, e), t)) / (2 * e);
-    float3 bg = mix(float3(1.0, 0.74, 0.08), float3(1.0, 0.9, 0.32), smoothstep(-1, 1, y));
-    bg *= 1.0 - 0.22 * smoothstep(0.2, 1.6, length(float2(a * 0.35, y * 1.1)));
-    float halo = smoothstep(0.25, 1.0, f);
-    bg = mix(bg, float3(1.0, 0.5, 0.1), halo * 0.3);
-    g *= saturate(1.5 - (f - 1.0) * 0.9);
-    float3 n = normalize(float3(-g * 0.12, 1.0));
-    float3 L = normalize(float3(-0.5, 0.65, 0.6));
-    float diff = saturate(dot(n, L)), spec = pow(saturate(dot(reflect(-L, n), float3(0, 0, 1))), 28);
-    float depth = saturate((f - 1.0) * 0.012);
-    float3 base = mix(float3(1.0, 0.27, 0.07), float3(0.5, 0.02, 0.05), depth);
-    float3 c = base * (0.5 + 0.75 * diff) + spec * 0.8 + float3(1, 0.5, 0.2) * pow(1 - saturate(n.z), 2) * 0.25;
-    return mix(bg, c, smoothstep(0.97, 1.05, f));
+static float3 lavaBackdrop(float3 d, float t) {
+    float a = atan2(d.x, -d.z), y = d.y;
+    float3 c = mix(float3(1.0, 0.45, 0.04), float3(1.0, 0.86, 0.22), smoothstep(-0.95, 0.35, y));
+    c += float3(1.0, 0.6, 0.1) * exp(-(y + 1.0) * 3.5) * 0.7;                       // bulb glow from below
+    c *= 0.9 + 0.12 * sin(a * 6.0 + y * 3.0 + t * 0.15) * smoothstep(0.0, 0.6, y + 0.3);   // vertical caustic streaks
+    float2 g = float2(a * 14.0, y * 14.0 - t * 0.2); float2 id = floor(g);
+    float speck = step(0.9, h21(id)) * smoothstep(0.45, 0.0, length(fract(g) - 0.5));
+    c += float3(1.0, 0.95, 0.6) * speck * 0.35;                                       // floating specks of wax
+    return c;
+}
+static float3 lavaTheme(float3 d, float t) {
+    float3 bg = lavaBackdrop(d, t);
+    float tt = 0.4; float dist = 1.0; bool hit = false;
+    for (int i = 0; i < 56; i++) {
+        dist = lavaSDF(d * tt, t);
+        if (dist < 0.004) { hit = true; break; }
+        tt += max(dist * 0.85, 0.015);
+        if (tt > 8.0) break;
+    }
+    if (!hit) return bg;
+    float3 p = d * tt; float e = 0.01;
+    float3 n = normalize(float3(lavaSDF(p + float3(e, 0, 0), t) - lavaSDF(p - float3(e, 0, 0), t),
+                                lavaSDF(p + float3(0, e, 0), t) - lavaSDF(p - float3(0, e, 0), t),
+                                lavaSDF(p + float3(0, 0, e), t) - lavaSDF(p - float3(0, 0, e), t)));
+    float3 L = normalize(float3(0.15, -0.8, 0.2));                                    // the bulb is below
+    float ndl = dot(n, -L), wrap = saturate(ndl * 0.6 + 0.4);
+    float fres = pow(1.0 - saturate(dot(n, -d)), 2.5);
+    float3 wax = mix(float3(0.95, 0.09, 0.04), float3(1.0, 0.36, 0.08), saturate(0.5 + 0.5 * n.y));
+    float3 col = wax * (0.5 + 0.9 * wrap);
+    col += float3(1.0, 0.75, 0.2) * fres * 0.9;                                       // translucent rim, light shining through the wax
+    float3 R = reflect(d, n);
+    col += float3(1.0, 0.95, 0.7) * pow(saturate(dot(R, -L)), 40.0) * 0.8;            // bulb highlight
+    col += float3(1.0, 0.9, 0.5) * pow(saturate(dot(R, normalize(float3(-0.3, 0.8, -0.5)))), 60.0) * 0.4;   // window highlight on top
+    return mix(col, bg, 1.0 - exp(-tt * 0.07));
 }
 
 // ---- 2 vice city waves
@@ -807,21 +834,307 @@ static float3 streetTheme(float3 d, float t, int th, texture2d<float> atlas) {
     return col;
 }
 
-static float3 themeColor(float3 d, float t, int theme, texture2d<float> atlas) {
+
+// ---- photographic themes: real CC0 HDRI panoramas (Poly Haven) + animated weather/life on top ----
+// 3 cobblestone_street_night, 4 outdoor_umbrellas, 6 shanghai_bund, 7 venice_sunset, 8 piazza_martin_lutero.
+static float3 envSample(float3 d, texture2d<float> env) {
+    constexpr sampler smp(filter::linear, mip_filter::linear, s_address::repeat, t_address::clamp_to_edge);
+    float u = atan2(d.x, -d.z) * 0.15915494 + 0.5;
+    float v = acos(clamp(d.y, -1.0f, 1.0f)) * 0.31830989;
+    return env.sample(smp, float2(u, v), level(1.0)).rgb;      // fixed mip: avoids the seam artefact of atan2 derivatives
+}
+static float lum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+static float3 satur(float3 c, float k) { return mix(float3(lum(c)), c, k); }
+
+// Flying objects drawn over a sky region; q = (azimuth difference, elevation difference).
+static float3 airshipsOver(float a, float y, float t, float3 c) {
+    for (int k = 0; k < 3; k++) {
+        float fk = float(k);
+        float a0 = fract(t * (0.006 + fk * 0.002) + fk * 0.33) * 6.2832 - 3.1416, el = 0.38 + fk * 0.17;
+        float2 q = float2(adiff(a, a0), y - el);
+        float L = 0.2 - fk * 0.04, H = 0.055 - fk * 0.01;
+        float env = smoothstep(1.0, 0.94, length(float2(q.x / L, q.y / H)));
+        float3 ec = mix(float3(0.28, 0.16, 0.1), float3(0.85, 0.6, 0.3), saturate(0.5 + q.y / H * 0.6));
+        ec *= 0.8 + 0.2 * step(0.5, fract(q.x / L * 6.0));
+        float fin = smoothstep(0.02, 0.0, abs(q.x + L * 0.95) - 0.012) * step(abs(q.y), H * 1.3);
+        float gond = step(abs(q.x), L * 0.25) * step(-H * 1.5, q.y) * step(q.y, -H * 0.9);
+        float prop = smoothstep(0.012, 0.0, abs(q.x + L * 1.08)) * step(abs(q.y), H * 0.6) * (0.5 + 0.5 * sin(t * 40));
+        c = mix(c, ec, max(env, fin) * 0.92);
+        c = mix(c, float3(0.12, 0.06, 0.04), gond);
+        c = mix(c, float3(0.9, 0.8, 0.6), prop * 0.5);
+    }
+    return c;
+}
+static float3 birdsOver(float a, float y, float t, float3 c) {
+    for (int b = 0; b < 6; b++) {
+        float fb = float(b); float ba = adiff(a, fract(t * (0.012 + fb * 0.003) + fb * 0.21) * 6.2832 - 3.1416);
+        float2 q = float2(ba * 9.0, (y - 0.5 - fb * 0.06) * 9.0);
+        float flap = sin(t * 9 + fb * 2.0) * 0.35;
+        c = mix(c, float3(0.08), smoothstep(0.07, 0.0, abs(q.y - (abs(q.x) * (0.7 + flap) - 0.1))) * step(abs(q.x), 0.45) * 0.85);
+    }
+    return c;
+}
+static float3 dronesOver(float a, float y, float t, float3 c) {
+    for (int k = 0; k < 5; k++) {
+        float fk = float(k); float a0 = fract(t * 0.01 * (1 + fk * 0.4) + fk * 0.27) * 6.2832 - 3.1416;
+        float2 q = float2(adiff(a, a0), y - 0.35 - fk * 0.07);
+        float body = smoothstep(0.011, 0.006, length(q * float2(1, 1.6)));
+        float blink = 0.5 + 0.5 * sin(t * 4 + fk * 3);
+        c = mix(c, float3(0.9, 0.95, 0.9), body);
+        c += float3(0.3, 1.0, 0.5) * smoothstep(0.02, 0.0, length(q + float2(0, 0.012))) * blink * 0.7;
+    }
+    return c;
+}
+static float3 trafficOver(float a, float y, float t, float3 c) {
+    for (int l = 0; l < 3; l++) {
+        float fl = float(l); float ey = 0.28 + fl * 0.14;
+        float cellN = 24.0 + fl * 10.0; float aa = a * cellN / 6.2832 + t * (0.6 + fl * 0.3) * (l == 1 ? -1.0 : 1.0);
+        float on = step(0.6, h11(floor(aa) + fl * 7.0));
+        float tail = smoothstep(0.0, 0.9, fract(aa)) * smoothstep(1.0, 0.85, fract(aa));
+        c += (l == 1 ? float3(1.0, 0.1, 0.3) : float3(0.2, 0.9, 1.0)) * smoothstep(0.012, 0.0, abs(y - ey)) * tail * on * 1.6;
+    }
+    return c;
+}
+
+// Our own café table, cup and steam in front of the panorama.
+static float3 cafeTable(float3 d, float t, int th, float3 col) {
+    if (d.y > -0.02) return col;
+    float topY = -0.55, cz = -0.95;
+    float tt = topY / d.y;
+    float3 P = d * tt; float2 q = P.xz - float2(0.0, cz); float r = length(q);
+    if (r < 0.42) {
+        float3 tc;
+        switch (th) {
+        case 3: tc = float3(0.12, 0.1, 0.09) + float3(0.9, 0.55, 0.25) * 0.15 / (1.0 + 20.0 * r * r); break;
+        case 4: tc = (step(0.5, fract(q.x * 7.0)) + step(0.5, fract(q.y * 7.0)) == 1.0) ? float3(0.9, 0.2, 0.2) : float3(1.0); break;
+        case 6: tc = float3(0.05, 0.05, 0.08) + float3(0.1, 0.9, 1.0) * smoothstep(0.04, 0.0, abs(r - 0.38)) * 1.5; break;
+        case 7: tc = float3(0.35, 0.18, 0.08) * (0.7 + 0.3 * cos(r * 30.0)) + float3(0.8, 0.5, 0.2) * smoothstep(0.03, 0.0, abs(r - 0.4)); break;
+        default: tc = float3(0.88, 0.8, 0.65) * (0.85 + 0.15 * vnoise(q * 12.0)); break;
+        }
+        col = tc * (0.85 + 0.15 * smoothstep(0.42, 0.2, r));   // slight edge darkening
+        float2 cq = q - float2(0.1, 0.05); float cr = length(cq);
+        if (cr < 0.07) col = mix(float3(0.95), float3(0.2, 0.1, 0.05), smoothstep(0.045, 0.04, cr));
+    }
+    float3 ps = float3(0.1, topY + 0.12 * fract(t * 0.5), cz + 0.05);
+    float dist = length(cross(d, ps));
+    col += float3(0.9) * smoothstep(0.05, 0.0, dist) * fbm(float2(dist * 20.0, t * 0.8)) * 0.5;
+    return col;
+}
+
+static float3 photoTheme(float3 d, float t, int th, texture2d<float> env) {
+    float a = atan2(d.x, -d.z), y = d.y;
+    float3 c = envSample(d, env);
+    switch (th) {
+    case 3: {   // rainy night street
+        c = satur(c, 0.8) * float3(0.55, 0.62, 0.78);       // the panorama is a bright exposure: pull it into a dark, cold, rainy night
+        float flash = step(0.965, fract(t * 0.11)) * (0.55 + 0.45 * sin(t * 55));
+        c = c * (1.0 + flash * 1.6) + float3(0.5, 0.6, 0.9) * flash * 0.25 * saturate(y + 0.4);
+        if (y < 0.0) {      // wet ground: moving glints + ripples
+            float2 g = d.xz / max(-y, 0.02) * 1.3; float2 id = floor(g); float ph = fract(t * 0.7 + h21(id)); float r = length(fract(g) - 0.5);
+            c += float3(0.6, 0.7, 0.9) * smoothstep(0.035, 0.0, abs(r - ph * 0.5)) * (1 - ph) * 0.5 * exp(y * 4.0);
+            c += float3(1.0, 0.8, 0.5) * pow(saturate(vnoise(g * 2.0 + t * 0.3)), 6.0) * 0.18 * exp(y * 3.0);
+        }
+        float rr = rain(a, y, t, 70.0, 1.4, 0.12, 1.0) * 0.5 + rain(a, y, t, 120.0, 1.9, 0.12, 2.0) * 0.4 + rain(a, y, t, 200.0, 2.4, 0.12, 3.0) * 0.3;
+        c += float3(0.65, 0.75, 0.95) * rr * 0.75;
+        break;
+    }
+    case 4: {   // sunny café street under umbrellas
+        c = satur(c, 1.12) * float3(1.04, 1.0, 0.94);
+        float sway = smoothstep(0.1, 0.5, y);
+        float3 d2 = normalize(d + float3(0.012 * sin(t * 1.3 + a * 7.0), 0.01 * sin(t * 1.7 + a * 5.0), 0.0) * sway);
+        c = mix(c, satur(envSample(d2, env), 1.12) * float3(1.04, 1.0, 0.94), sway);          // umbrellas drift in the breeze
+        float2 pc = float2(a * 22.0, y * 22.0 - t * 0.3); float2 id = floor(pc);
+        c += float3(1.0, 0.95, 0.6) * step(0.94, h21(id)) * smoothstep(0.2, 0.0, length(fract(pc) - 0.5)) * 0.3;
+        c = birdsOver(a, y, t, c);
+        break;
+    }
+    case 6: {   // cyberpunk waterfront at night
+        float L = lum(c);
+        c = satur(c, 1.55) * float3(1.2, 0.85, 1.25);
+        float neon = smoothstep(0.45, 0.9, L);
+        float2 cell = floor(float2(a * 90.0, y * 90.0));
+        c *= 1.0 + neon * (0.18 * sin(t * 6.0 + h21(cell) * 30.0) + 0.35);              // flickering signage + bloom-ish boost
+        c += float3(0.9, 0.2, 0.8) * neon * 0.12 + float3(0.1, 0.8, 1.0) * smoothstep(0.7, 1.0, L) * 0.15;
+        if (y > 0.05) c = trafficOver(a, y, t, c);
+        float rr = rain(a, y, t, 90.0, 1.8, 0.1, 5.0) * 0.4 + rain(a, y, t, 180.0, 2.4, 0.1, 6.0) * 0.3;
+        c += float3(0.5, 0.7, 1.0) * rr * 0.55;
+        if (y < 0.0) c += float3(0.0, 0.6, 1.0) * smoothstep(0.95, 1.0, sin(d.x / max(-y, 0.03) * 3.0 + t)) * 0.04;
+        break;
+    }
+    case 7: {   // steampunk dusk
+        float L = lum(c);
+        c = mix(c, float3(L) * float3(1.35, 0.98, 0.62), 0.55) * 1.05;                  // brass/sepia grade
+        c = mix(c, float3(0.95, 0.7, 0.4), saturate(0.25 - abs(y)) * 0.5);                // amber horizon haze
+        if (y > 0.05) c = airshipsOver(a, y, t, c);
+        float steam = fbm(float2(a * 3.0, y * 2.5 - t * 0.25)) * smoothstep(-0.1, 0.5, y) * smoothstep(0.9, 0.2, y);
+        c += float3(0.95, 0.85, 0.7) * pow(steam, 2.0) * 0.3;
+        c += float3(1.0, 0.75, 0.4) * 0.05 * fbm(float2(a * 4.0, y * 4.0 - t * 0.1));
+        break;
+    }
+    default: {  // solarpunk park
+        c = satur(c, 1.3) * float3(0.98, 1.06, 1.0);
+        float L = lum(c);
+        c += float3(1.0, 0.95, 0.7) * smoothstep(0.7, 1.0, L) * 0.1;                     // sunlit bloom
+        if (y > 0.1) c = dronesOver(a, y, t, c);
+        float2 pc = float2(a * 16.0, y * 16.0 - t * 0.35); float2 pid = floor(pc);
+        c += float3(1.0, 0.95, 0.5) * step(0.93, h21(pid)) * smoothstep(0.2, 0.0, length(fract(pc) - 0.5 - 0.2 * float2(sin(t + h21(pid) * 6), 0))) * 0.5;
+        break;
+    }
+    }
+    c = cafeTable(d, t, th, c);
+    return c;
+}
+
+// ---- 9 Sword Art Online style interface: white/silver glass windows floating in a bright virtual space
+static float hexEdgeDist(float2 p, float size) {
+    float q = (2.0 / 3.0 * p.x) / size, r = (-1.0 / 3.0 * p.x + 0.57735027 * p.y) / size;
+    float3 cube = float3(q, -q - r, r), rc = round(cube);
+    float3 df = abs(rc - cube);
+    if (df.x > df.y && df.x > df.z) rc.x = -rc.y - rc.z; else if (df.y > df.z) rc.y = -rc.x - rc.z; else rc.z = -rc.x - rc.y;
+    float2 center = float2(size * 1.5 * rc.x, size * (0.8660254 * rc.x + 1.7320508 * rc.z));
+    float2 dd = p - center;
+    float m = max(abs(dd.y), max(abs(dot(dd, float2(0.8660254, 0.5))), abs(dot(dd, float2(-0.8660254, 0.5)))));
+    return size * 0.8660254 - m;
+}
+static float rrect(float2 q, float2 hs, float r) { float2 w = abs(q) - hs + r; return length(max(w, 0.0)) + min(max(w.x, w.y), 0.0) - r; }
+
+// One floating window (angular coordinates) → rgb + alpha. kind: 0 menu list, 1 status, 2 inventory, 3 map.
+static float4 saoWindow(float2 q, float2 hs, int kind, float seed, float t, texture2d<float> atlas) {
+    float sd = rrect(q, hs, 0.025);
+    if (sd > 0.03) return float4(0);
+    float2 u = q / hs;                                  // -1…1 inside
+    float3 glass = mix(float3(0.80, 0.90, 0.99), float3(0.97, 0.99, 1.0), saturate(u.y * 0.5 + 0.5));
+    float alpha = 0.82 * smoothstep(0.0, -0.006, sd);
+    float3 col = glass;
+    float border = smoothstep(0.012, 0.0, abs(sd + 0.006));
+    col = mix(col, float3(0.55, 0.78, 0.95), border * 0.9);
+    float glow = smoothstep(0.03, 0.0, sd) * (1.0 - smoothstep(0.0, -0.006, sd));
+    float3 outCol = col; float outA = max(alpha, glow * 0.5);
+    float tb = smoothstep(0.84, 0.86, u.y) * step(u.y, 0.99);                      // title bar
+    outCol = mix(outCol, float3(0.62, 0.7, 0.8), tb * 0.85);
+    float2 uu = u * 0.5 + 0.5;
+    if (kind == 0) {                                                                // list of entries
+        for (int r = 0; r < 7; r++) {
+            float fr = float(r);
+            float ry = 0.74 - fr * 0.115;
+            float row = smoothstep(0.045, 0.04, abs(u.y - ry));
+            bool sel = r == int(fract(t * 0.12 + seed) * 7.0);
+            outCol = mix(outCol, sel ? float3(1.0, 0.93, 0.78) : float3(0.9, 0.95, 1.0), row * 0.7);
+            if (sel) outCol = mix(outCol, float3(1.0, 0.6, 0.15), smoothstep(0.045, 0.04, abs(u.y - ry)) * smoothstep(-0.9, -0.88, u.x) * smoothstep(-0.8, -0.82, u.x));
+            float gx = (u.x + 0.7) / 1.5 * 9.0, gy = (u.y - (ry - 0.05)) / 0.1;
+            if (gx > 0.0 && gx < 9.0 && gy > 0.0 && gy < 1.0 && abs(u.y - ry) < 0.045) {
+                float gi = floor(h21(float2(floor(gx) + seed * 7.0, fr + seed)) * 36.0);
+                float g = glyphAt(atlas, gi, float2(fract(gx), gy));
+                outCol = mix(outCol, float3(0.22, 0.28, 0.4), g * 0.9);
+            }
+        }
+        float sb = smoothstep(0.012, 0.0, abs(u.x - 0.92)) * step(abs(u.y + 0.1 + 0.4 * sin(t * 0.3 + seed)), 0.25);   // scroll thumb
+        outCol = mix(outCol, float3(0.55, 0.78, 0.95), sb);
+    } else if (kind == 1) {                                                         // HP bar + name + digits
+        float bar = smoothstep(0.02, 0.0, rrect(float2(u.x + 0.0, u.y - 0.45), float2(0.8, 0.09), 0.09));
+        float fill = step(u.x, -0.8 + 1.6 * (0.62 + 0.03 * sin(t * 0.5 + seed)));
+        outCol = mix(outCol, float3(0.35, 0.4, 0.45), bar);
+        outCol = mix(outCol, mix(float3(0.45, 0.85, 0.35), float3(0.95, 0.85, 0.3), saturate(u.x * 0.5 + 0.7)), bar * fill * step(abs(u.y - 0.45), 0.07));
+        for (int r = 0; r < 3; r++) {
+            float ry = 0.1 - float(r) * 0.22;
+            float gx = (u.x + 0.8) / 1.6 * 10.0, gy = (u.y - (ry - 0.08)) / 0.16;
+            if (gx > 0.0 && gx < 10.0 && gy > 0.0 && gy < 1.0) {
+                float gi = r == 1 ? floor(h21(float2(floor(gx), seed)) * 10.0) : floor(h21(float2(floor(gx) + 3.0 * float(r), seed + 1.0)) * 36.0);
+                outCol = mix(outCol, float3(0.2, 0.27, 0.4), glyphAt(atlas, gi, float2(fract(gx), gy)) * 0.9);
+            }
+        }
+    } else if (kind == 2) {                                                         // inventory grid
+        float2 g = float2((u.x + 0.85) / 1.7 * 4.0, (u.y + 0.85) / 1.6 * 4.0);
+        if (g.x > 0 && g.x < 4 && g.y > 0 && g.y < 4) {
+            float2 id = floor(g), f = fract(g) - 0.5;
+            float slot = smoothstep(0.05, 0.0, rrect(f, float2(0.4), 0.08));
+            outCol = mix(outCol, float3(0.86, 0.92, 0.98), slot);
+            outCol = mix(outCol, float3(0.55, 0.7, 0.85), smoothstep(0.03, 0.0, abs(rrect(f, float2(0.4), 0.08))) * 0.8);
+            float hasItem = step(0.35, h21(id + seed * 5.0));
+            float hue = h21(id + seed * 9.0);
+            float3 ic = 0.55 + 0.45 * cos(6.2832 * (hue + float3(0.0, 0.33, 0.67)));
+            float shape = hue > 0.5 ? smoothstep(0.26, 0.2, length(f)) : smoothstep(0.26, 0.2, abs(f.x) + abs(f.y));
+            outCol = mix(outCol, ic, shape * hasItem);
+        }
+    } else {                                                                        // map with radar sweep
+        float2 mp = u * float2(1.0, 1.0);
+        float hexl = smoothstep(0.012, 0.0, hexEdgeDist(mp * 1.0, 0.16));
+        outCol = mix(outCol, float3(0.65, 0.82, 0.95), hexl * 0.7);
+        float r = length(mp - float2(0.0, -0.05));
+        float ang = atan2(mp.y + 0.05, mp.x);
+        float sweep = smoothstep(0.0, 1.0, fract((ang - t * 0.8) / 6.2832)) * step(r, 0.78);
+        outCol = mix(outCol, float3(0.5, 0.85, 1.0), sweep * 0.35);
+        outCol = mix(outCol, float3(0.6, 0.8, 0.95), smoothstep(0.012, 0.0, abs(r - 0.78)));
+        outCol = mix(outCol, float3(1.0, 0.6, 0.15), smoothstep(0.05, 0.03, length(mp - float2(0.1 * sin(t * 0.4), -0.05 + 0.1 * cos(t * 0.3)))));
+    }
+    return float4(outCol, outA);
+}
+
+static float3 saoTheme(float3 d, float t, texture2d<float> atlas) {
+    float a = atan2(d.x, -d.z), y = d.y;
+    // bright virtual sky
+    float3 col = mix(float3(0.96, 0.985, 1.0), float3(0.55, 0.78, 0.97), saturate(pow(max(y, 0.0), 0.55) * 1.3));
+    col += float3(1.0, 0.95, 0.85) * exp(-pow(length(float2(adiff(a, 0.0), y - 0.28)) * 3.0, 2.0)) * 0.35;
+    col = mix(col, float3(1.0), smoothstep(0.55, 0.85, fbm(float2(a * 1.6 + t * 0.01, y * 4.0))) * smoothstep(0.05, 0.4, y) * 0.55);
+    // glowing hex grid floor
+    if (y < 0.0) {
+        float2 p = d.xz / max(-y, 0.01);
+        float3 floorC = mix(float3(0.93, 0.97, 1.0), float3(0.72, 0.86, 0.98), saturate(-y * 1.6));
+        float ed = hexEdgeDist(p * 0.5, 0.5);
+        float line = smoothstep(0.035, 0.0, ed) * exp(y * 1.2);
+        float pulse = 0.5 + 0.5 * sin(length(p) * 0.5 - t * 1.5);
+        floorC = mix(floorC, float3(0.35, 0.72, 1.0), line * (0.5 + 0.5 * pulse));
+        floorC += float3(0.6, 0.85, 1.0) * smoothstep(0.35, 0.0, ed) * 0.06 * pulse;
+        col = mix(col, floorC, smoothstep(0.0, -0.03, y));
+        col = mix(col, float3(0.97, 0.99, 1.0), exp(y * 18.0) * 0.8);   // horizon haze
+    }
+    // rising data motes
+    float2 pc = float2(a * 20.0, y * 20.0 - t * 0.5); float2 pid = floor(pc);
+    col += float3(0.5, 0.8, 1.0) * step(0.93, h21(pid)) * step(abs(fract(pc.x) - 0.5), 0.12) * step(abs(fract(pc.y) - 0.5), 0.12) * 0.5;
+    // floating windows around the player (alpha-composited)
+    float4 wins[6] = { float4(0.0, 0.05, 0.30, 0.38), float4(1.05, 0.12, 0.26, 0.30), float4(2.1, 0.02, 0.28, 0.34), float4(3.15, 0.1, 0.30, 0.30), float4(4.2, 0.0, 0.26, 0.36), float4(5.25, 0.14, 0.28, 0.28) };
+    for (int k = 0; k < 6; k++) {
+        float4 w = wins[k];
+        float bob = 0.015 * sin(t * 0.5 + float(k) * 1.3);
+        float2 q = float2(adiff(a, w.x + 0.12 * sin(t * 0.1 + float(k))), y - w.y - bob);
+        if (abs(q.x) > w.z + 0.05 || abs(q.y) > w.w + 0.05) continue;
+        float4 r = saoWindow(q, float2(w.z, w.w), k % 4, float(k) * 1.7, t, atlas);
+        col = mix(col, r.rgb, r.a);
+        col += float3(0.4, 0.7, 1.0) * smoothstep(0.045, 0.0, abs(rrect(q, float2(w.z, w.w), 0.025))) * 0.12;   // soft outer glow
+    }
+    // LINK START lettering high above the horizon
+    {
+        float2 q = float2(adiff(a, 0.6), y - 0.62);
+        float gx = q.x / 0.065 + 5.0;                        // 10 letters
+        if (gx > 0.0 && gx < 10.0 && abs(q.y) < 0.05) {
+            const int msg[10] = { 21, 18, 23, 20, 36, 28, 29, 10, 27, 29 };   // L I N K _ S T A R T (atlas indices)
+            int li = int(gx);
+            if (msg[li] < 36) {
+                float g = glyphAt(atlas, float(msg[li]), float2(fract(gx), q.y / 0.1 + 0.5));
+                col = mix(col, float3(0.3, 0.65, 0.95), g);
+                col += float3(0.4, 0.8, 1.0) * g * 0.3 * (0.6 + 0.4 * sin(t * 2.0 + gx));
+            }
+        }
+    }
+    return col;
+}
+
+static float3 themeColor(float3 d, float t, int theme, texture2d<float> atlas, texture2d<float> env) {
     float a = atan2(d.x, -d.z), y = d.y;
     switch (theme) {
-    case 1: return lavaTheme(a, y, t);
+    case 1: return lavaTheme(d, t);
     case 2: return viceTheme(a, y, t, d);
     case 5: return matrixTheme(a, y, t, atlas);
-    default: return streetTheme(d, t, theme, atlas);
+    case 9: return saoTheme(d, t, atlas);
+    default: return photoTheme(d, t, theme, env);
     }
 }
 
-fragment float4 themeFragment(VOut in [[stage_in]], constant ThemeParams &u [[buffer(0)]], texture2d<float> atlas [[texture(0)]]) {
+fragment float4 themeFragment(VOut in [[stage_in]], constant ThemeParams &u [[buffer(0)]], texture2d<float> atlas [[texture(0)]], texture2d<float> env [[texture(1)]]) {
     float2 n = float2(in.uv.x * 2 - 1, 1 - in.uv.y * 2);
     float3 ray = normalize(float3(n.x * u.tanY * u.aspect, n.y * u.tanY, -1));
     float3 d = normalize(u.right * ray.x + u.up * ray.y + u.back * ray.z);
-    float3 c = themeColor(d, u.time, u.theme, atlas);
+    float3 c = themeColor(d, u.time, u.theme, atlas, env);
     if (u.theme != 1 && u.theme != 2 && u.theme != 5) {
         // Filmic shoulder so lamps/neon roll off instead of clipping, plus a gentle vignette.
         float3 x = max(c, 0.0);
@@ -830,3 +1143,4 @@ fragment float4 themeFragment(VOut in [[stage_in]], constant ThemeParams &u [[bu
     }
     return float4(saturate(c), 1);
 }
+

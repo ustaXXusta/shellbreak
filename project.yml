@@ -46,7 +46,7 @@ targets:
   PhoneClient:
     type: application
     platform: iOS
-    sources: [PhoneClient/Sources, PhoneClient/Resources/Assets.xcassets]
+    sources: [PhoneClient/Sources, PhoneClient/Resources/Assets.xcassets, PhoneClient/Resources/Themes]
     dependencies:
       - package: DesktopARShared
     settings:

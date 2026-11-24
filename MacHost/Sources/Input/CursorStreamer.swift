@@ -40,7 +40,7 @@ final class CursorStreamer {
 
     private func poll() {
         tick += 1
-        if tick % 12 == 1 { refreshImage() }
+        if tick % 40 == 1 { refreshImage() }   // PNG conversion is expensive: ~3 Hz is plenty for cursor shape changes
         guard let loc = CGEvent(source: nil)?.location else { return }
         let list = displays()
         let hit = list.first { CGDisplayBounds($0.displayID).contains(loc) }

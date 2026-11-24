@@ -18,6 +18,10 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private let cursor: CursorOverlay
     private let spritePipeline: MTLRenderPipelineState
     private let themePipeline: MTLRenderPipelineState
+    private let blitPipeline: MTLRenderPipelineState
+    private var themeTex: MTLTexture?
+    private var themeScale: Float = 0.5
+    private var frameEMA = 1.0 / 60, lastFrameT = CACurrentMediaTime(), lastScaleAdjust = CACurrentMediaTime()
     private let ar: ARSessionController
     private let cameraPipeline: MTLRenderPipelineState
     private let hud: HUDOverlay
@@ -54,6 +58,8 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         cameraPipeline = cam
         guard let th = pipe("quadVertex", "themeFragment", .bgra8Unorm) else { return nil }
         themePipeline = th
+        guard let bl = pipe("quadVertex", "quadFragment", .bgra8Unorm) else { return nil }
+        blitPipeline = bl
         panelPipeline = a; testPipeline = b; distortPipeline = c
         CVMetalTextureCacheCreate(nil, nil, dev, nil, &cache)
         super.init()
@@ -330,7 +336,7 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
     private var pickerOpen: Bool { pickerIdx != nil }
     private var handModel: simd_float4x4?
     private var handHalf: Float = 0.05
-    static let themeNames = ["Siyah", "Lav lambası", "Vice City", "Yağmur", "Güneşli", "Matrix", "Cyberpunk", "Steampunk", "Solarpunk"]
+    static let themeNames = ["Siyah", "Lav lambası", "Vice City", "Yağmur", "Güneşli", "Matrix", "Cyberpunk", "Steampunk", "Solarpunk", "Sword Art Online"]
 
     private struct RayHit { var idx: Int; var point: SIMD3<Float>; var local: SIMD2<Float>; var t: Float }
 
@@ -547,6 +553,42 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
         let refs = texRefs
         cb.addCompletedHandler { _ in _ = refs.count }
 
+        // World theme: direction-only, so it is drawn ONCE per frame at reduced resolution and shared by both eyes.
+        // The resolution adapts to the frame time so the heavy scenes never make head tracking stutter.
+        let themeActive = cameraTex == nil && !cal.testPattern && settings.theme > 0
+        let nowT = CACurrentMediaTime()
+        frameEMA = frameEMA * 0.92 + min(nowT - lastFrameT, 0.1) * 0.08; lastFrameT = nowT
+        if themeActive, nowT - lastScaleAdjust > 1.0 {
+            lastScaleAdjust = nowT
+            if frameEMA > 0.0215 { themeScale = max(0.25, themeScale - 0.06) } else if frameEMA < 0.0185 { themeScale = min(0.6, themeScale + 0.03) }
+        }
+        if themeActive {
+            let tw = max(64, Int(Float(eyeSize.width) * themeScale)), th = max(64, Int(Float(eyeSize.height) * themeScale))
+            if themeTex == nil || themeTex!.width != tw || themeTex!.height != th {
+                let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: tw, height: th, mipmapped: false)
+                d.usage = [.renderTarget, .shaderRead]; d.storageMode = .private
+                themeTex = device.makeTexture(descriptor: d)
+            }
+            if let tt = themeTex {
+                let rp = MTLRenderPassDescriptor()
+                rp.colorAttachments[0].texture = tt; rp.colorAttachments[0].loadAction = .dontCare; rp.colorAttachments[0].storeAction = .store
+                if let enc = cb.makeRenderCommandEncoder(descriptor: rp) {
+                    struct TP { var right: SIMD4<Float>; var up: SIMD4<Float>; var back: SIMD4<Float>; var tanY: Float; var aspect: Float; var time: Float; var theme: Int32 }
+                    var tp = TP(right: camT.columns.0, up: camT.columns.1, back: camT.columns.2,
+                                tanY: Float(tan(cal.fovDegrees * .pi / 360)), aspect: Float(aspectEye),
+                                time: Float(nowT.truncatingRemainder(dividingBy: 3600)), theme: Int32(settings.theme))
+                    var sc = SIMD2<Float>(1, 1)
+                    enc.setRenderPipelineState(themePipeline)
+                    enc.setVertexBytes(&sc, length: 8, index: 0)
+                    enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0)
+                    enc.setFragmentTexture(cursor.glyphAtlas, index: 0)
+                    enc.setFragmentTexture(cursor.themeEnvironment(settings.theme), index: 1)
+                    enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+                    enc.endEncoding()
+                }
+            }
+        }
+
         for eye in 0..<2 {
             let rpd = MTLRenderPassDescriptor()
             rpd.colorAttachments[0].texture = eyeTextures[eye]
@@ -576,16 +618,11 @@ final class StereoRenderer: NSObject, MTKViewDelegate {
                 enc.setFragmentTexture(yT, index: 0); enc.setFragmentTexture(cT, index: 1)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
-            if cameraTex == nil, !cal.testPattern, settings.theme > 0 {
-                struct TP { var right: SIMD4<Float>; var up: SIMD4<Float>; var back: SIMD4<Float>; var tanY: Float; var aspect: Float; var time: Float; var theme: Int32 }
-                var tp = TP(right: camT.columns.0, up: camT.columns.1, back: camT.columns.2,
-                            tanY: Float(tan(cal.fovDegrees * .pi / 360)), aspect: Float(aspectEye),
-                            time: Float(CACurrentMediaTime().truncatingRemainder(dividingBy: 3600)), theme: Int32(settings.theme))
+            if themeActive, let tt = themeTex {
                 var sc = SIMD2<Float>(1, 1)
-                enc.setRenderPipelineState(themePipeline)
+                enc.setRenderPipelineState(blitPipeline)
                 enc.setVertexBytes(&sc, length: 8, index: 0)
-                enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0)
-                enc.setFragmentTexture(cursor.glyphAtlas, index: 0)
+                enc.setFragmentTexture(tt, index: 0)
                 enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             }
             if cal.testPattern || tex.isEmpty {

@@ -3,6 +3,7 @@
 import Metal
 import simd
 import AppKit
+import MetalKit
 import Foundation
 import CoreGraphics
 import ImageIO
@@ -39,7 +40,7 @@ let atd = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width:
 let atlasTex = dev.makeTexture(descriptor: atd)!
 atlasTex.replace(region: MTLRegionMake2D(0, 0, 512, 512), mipmapLevel: 0, withBytes: atlasPx, bytesPerRow: 512)
 let W = 640, H = 360
-var sheet = [UInt8](repeating: 0, count: W * 4 * H * 2 * 4)
+var sheet = [UInt8](repeating: 0, count: W * 4 * H * 3 * 4)
 struct TP { var right: SIMD4<Float>; var up: SIMD4<Float>; var back: SIMD4<Float>; var tanY: Float; var aspect: Float; var time: Float; var theme: Int32 }
 let tSec: Float = CommandLine.arguments.count > 4 ? Float(CommandLine.arguments[4]) ?? 3 : 3
 let yaw = Float(yawDeg * .pi / 180), pitch = Float(pitchDeg * .pi / 180)
@@ -49,7 +50,12 @@ let right0 = SIMD3<Float>(cos(yaw), 0, -sin(yaw))
 let up0 = simd_cross(-fwd, right0)
 func norm(_ v: SIMD3<Float>) -> SIMD3<Float> { v / (v * v).sum().squareRoot() }
 let back = -fwd
-for theme in 1...8 {
+let envNames: [Int: String] = [3: "cobblestone_street_night", 4: "outdoor_umbrellas", 6: "shanghai_bund", 7: "venice_sunset", 8: "piazza_martin_lutero"]
+let loaderMTK = MTKTextureLoader(device: dev)
+let dummyDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
+let dummyTex = dev.makeTexture(descriptor: dummyDesc)!
+let themeCount = Int(CommandLine.arguments.count > 5 ? CommandLine.arguments[5] : "9") ?? 9
+for theme in 1...themeCount {
     let td = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: W, height: H, mipmapped: false)
     td.usage = [.renderTarget]; td.storageMode = .shared
     let tex = dev.makeTexture(descriptor: td)!
@@ -58,6 +64,12 @@ for theme in 1...8 {
     var tp = TP(right: SIMD4(norm(right0), 0), up: SIMD4(norm(up0), 0), back: SIMD4(back, 0), tanY: Float(tan(90.0 * .pi / 360)), aspect: Float(W) / Float(H), time: tSec, theme: Int32(theme))
     var sc = SIMD2<Float>(1, 1)
     enc.setRenderPipelineState(pso); enc.setVertexBytes(&sc, length: 8, index: 0); enc.setFragmentBytes(&tp, length: MemoryLayout<TP>.size, index: 0); enc.setFragmentTexture(atlasTex, index: 0)
+    var envTex: MTLTexture = dummyTex
+    if let n = envNames[theme] {
+        let url = root.appendingPathComponent("PhoneClient/Resources/Themes/\(n).jpg")
+        envTex = (try? loaderMTK.newTexture(URL: url, options: [.SRGB: false, .generateMipmaps: true, .origin: MTKTextureLoader.Origin.topLeft])) ?? dummyTex
+    }
+    enc.setFragmentTexture(envTex, index: 1)
     enc.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4); enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
     var px = [UInt8](repeating: 0, count: W * H * 4)
     tex.getBytes(&px, bytesPerRow: W * 4, from: MTLRegionMake2D(0, 0, W, H), mipmapLevel: 0)
@@ -70,7 +82,7 @@ for theme in 1...8 {
     for row in 0..<H { for col in 0..<(W * 4) { sheet[(oy + row) * (W * 4 * 4) + ox * 4 + col] = px[row * W * 4 + col] } }
 }
 let cs = CGColorSpaceCreateDeviceRGB()
-let ctx = CGContext(data: &sheet, width: W * 4, height: H * 2, bitsPerComponent: 8, bytesPerRow: W * 16, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+let ctx = CGContext(data: &sheet, width: W * 4, height: H * 3, bitsPerComponent: 8, bytesPerRow: W * 16, space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
 let url = URL(fileURLWithPath: "\(out)/sheet.png")
 let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)!
 CGImageDestinationAddImage(dest, ctx.makeImage()!, nil); CGImageDestinationFinalize(dest)

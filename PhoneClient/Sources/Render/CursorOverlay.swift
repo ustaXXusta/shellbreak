@@ -49,6 +49,35 @@ final class CursorOverlay: @unchecked Sendable {
         return try? loader.newTexture(cgImage: cg, options: [.SRGB: false])
     }()
 
+    /// Real CC0 panoramas (Poly Haven HDRIs, tone-mapped JPG) for the photographic world themes. Loaded off the render thread;
+    /// a 1×1 placeholder is returned until the texture is ready.
+    private static let envNames: [Int: String] = [3: "cobblestone_street_night", 4: "outdoor_umbrellas", 6: "shanghai_bund", 7: "venice_sunset", 8: "piazza_martin_lutero"]
+    private let envLock = NSLock()
+    private var envCache: [Int: MTLTexture] = [:]
+    private var envLoading: Set<Int> = []
+    private lazy var envDummy: MTLTexture? = {
+        guard let dev = MTLCreateSystemDefaultDevice() else { return nil }
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
+        let t = dev.makeTexture(descriptor: d)
+        t?.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: [UInt8](repeating: 90, count: 4), bytesPerRow: 4)
+        return t
+    }()
+    func themeEnvironment(_ theme: Int) -> MTLTexture? {
+        guard let name = Self.envNames[theme] else { return envDummy }
+        envLock.lock(); defer { envLock.unlock() }
+        if let t = envCache[theme] { return t }
+        if !envLoading.contains(theme), let loader, let url = Bundle.main.url(forResource: name, withExtension: "jpg") {
+            envLoading.insert(theme)
+            let opts: [MTKTextureLoader.Option: Any] = [.SRGB: false, .generateMipmaps: true, .origin: MTKTextureLoader.Origin.topLeft,
+                                                       .textureUsage: MTLTextureUsage.shaderRead.rawValue, .textureStorageMode: MTLStorageMode.private.rawValue]
+            loader.newTexture(URL: url, options: opts) { [weak self] tex, _ in
+                guard let self else { return }
+                self.envLock.lock(); if let tex { self.envCache[theme] = tex }; self.envLoading.remove(theme); self.envLock.unlock()
+            }
+        }
+        return envDummy
+    }
+
     /// Glass-style handle sprites ("bar", "corner", "rotate", "add", "close", "dark", "theme", "c0"…"c8"), each with a ".hot" variant.
     struct Handles {
         var tex: [String: MTLTexture]
@@ -78,7 +107,8 @@ final class CursorOverlay: @unchecked Sendable {
         let colors: [UIColor?] = [nil, UIColor(red: 0.95, green: 0.15, blue: 0.1, alpha: 1), UIColor(red: 1, green: 0.25, blue: 0.65, alpha: 1),
                                   UIColor(red: 0.35, green: 0.5, blue: 0.75, alpha: 1), UIColor(red: 1, green: 0.8, blue: 0.1, alpha: 1),
                                   UIColor(red: 0.0, green: 0.85, blue: 0.25, alpha: 1), UIColor(red: 0.1, green: 0.9, blue: 1, alpha: 1),
-                                  UIColor(red: 0.78, green: 0.5, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1)]
+                                  UIColor(red: 0.78, green: 0.5, blue: 0.2, alpha: 1), UIColor(red: 0.55, green: 0.85, blue: 0.25, alpha: 1),
+                                  UIColor(red: 0.62, green: 0.86, blue: 1.0, alpha: 1)]
         for (i, c) in colors.enumerated() { put("c\(i)") { Self.glassDot(size: sq, color: c, hot: $0) } }
         return out.count >= 2 * (11 + colors.count) ? Handles(tex: out) : nil
     }()

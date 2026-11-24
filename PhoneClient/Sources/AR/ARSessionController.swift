@@ -11,7 +11,7 @@ final class ARSessionController: NSObject, ARSessionDelegate, @unchecked Sendabl
 
     func start() {
         let cfg = ARWorldTrackingConfiguration()
-        cfg.planeDetection = [.horizontal, .vertical]
+        cfg.planeDetection = []        // not used for anything yet; detection costs CPU/heat
         // ARKit's default 30 fps format makes poses judder at 60 Hz: prefer a 60 fps format (≤ 1920 px wide to limit heat).
         let formats = ARWorldTrackingConfiguration.supportedVideoFormats.filter { $0.framesPerSecond >= 60 }
         if let f = formats.filter({ $0.imageResolution.width <= 1920 }).max(by: { $0.imageResolution.width < $1.imageResolution.width }) ?? formats.first {
