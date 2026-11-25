@@ -356,3 +356,4 @@ Shellbreak is a personal project in active development. Full checklist: [`docs/R
 - 🗺️ **Later:** Windows host, Android viewer.
 
 Third-party credits (CC0 panoramas, shader techniques): [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md).
+# shellbreak
