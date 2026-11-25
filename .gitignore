@@ -4,3 +4,8 @@
 DerivedData/
 .DS_Store
 xcuserdata/
+build/
+dist/
+Payload/
+*.ipa
+*.dmg
